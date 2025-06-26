@@ -1,4 +1,4 @@
--- Eliminar tablas existentes si existen (para evitar duplicados)
+-- Eliminar tablas existentes para evitar conflictos
 DROP TABLE IF EXISTS order_history CASCADE;
 DROP TABLE IF EXISTS returned_products CASCADE;
 DROP TABLE IF EXISTS missing_products CASCADE;
@@ -6,7 +6,7 @@ DROP TABLE IF EXISTS products CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
--- Crear tabla de usuarios
+-- Crear tabla de usuarios con constraint UNIQUE
 CREATE TABLE users (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -75,7 +75,7 @@ CREATE TABLE order_history (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Crear índices para mejor rendimiento
+-- Crear índices para mejorar performance
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_orders_created_at ON orders(created_at);
 CREATE INDEX idx_products_order_id ON products(order_id);
