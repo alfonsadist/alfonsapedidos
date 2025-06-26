@@ -66,24 +66,3 @@ CREATE TABLE IF NOT EXISTS order_history (
   notes TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-
--- Crear índices para mejor performance
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-CREATE INDEX IF NOT EXISTS idx_products_order_id ON products(order_id);
-CREATE INDEX IF NOT EXISTS idx_missing_products_order_id ON missing_products(order_id);
-CREATE INDEX IF NOT EXISTS idx_returned_products_order_id ON returned_products(order_id);
-CREATE INDEX IF NOT EXISTS idx_order_history_order_id ON order_history(order_id);
-
--- Función para actualizar updated_at automáticamente
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- Trigger para actualizar updated_at en orders
-CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
