@@ -1,13 +1,21 @@
+-- Eliminar tablas existentes si existen (para evitar duplicados)
+DROP TABLE IF EXISTS order_history CASCADE;
+DROP TABLE IF EXISTS returned_products CASCADE;
+DROP TABLE IF EXISTS missing_products CASCADE;
+DROP TABLE IF EXISTS products CASCADE;
+DROP TABLE IF EXISTS orders CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
 -- Crear tabla de usuarios
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  name TEXT NOT NULL,
+  name TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('vale', 'armador')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Crear tabla de pedidos
-CREATE TABLE IF NOT EXISTS orders (
+CREATE TABLE orders (
   id TEXT PRIMARY KEY,
   client_name TEXT NOT NULL,
   client_address TEXT,
@@ -23,7 +31,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 -- Crear tabla de productos
-CREATE TABLE IF NOT EXISTS products (
+CREATE TABLE products (
   id TEXT PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   code TEXT,
@@ -35,7 +43,7 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 -- Crear tabla de productos faltantes
-CREATE TABLE IF NOT EXISTS missing_products (
+CREATE TABLE missing_products (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_id TEXT NOT NULL,
@@ -46,7 +54,7 @@ CREATE TABLE IF NOT EXISTS missing_products (
 );
 
 -- Crear tabla de productos devueltos
-CREATE TABLE IF NOT EXISTS returned_products (
+CREATE TABLE returned_products (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_id TEXT NOT NULL,
@@ -58,7 +66,7 @@ CREATE TABLE IF NOT EXISTS returned_products (
 );
 
 -- Crear tabla de historial
-CREATE TABLE IF NOT EXISTS order_history (
+CREATE TABLE order_history (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   action TEXT NOT NULL,
@@ -66,3 +74,11 @@ CREATE TABLE IF NOT EXISTS order_history (
   notes TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Crear índices para mejor rendimiento
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_created_at ON orders(created_at);
+CREATE INDEX idx_products_order_id ON products(order_id);
+CREATE INDEX idx_missing_products_order_id ON missing_products(order_id);
+CREATE INDEX idx_returned_products_order_id ON returned_products(order_id);
+CREATE INDEX idx_order_history_order_id ON order_history(order_id);
