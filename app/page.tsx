@@ -21,7 +21,8 @@ import {
 } from "lucide-react"
 import { OrderDialog } from "./components/order-dialog"
 import { OrderDetail } from "./components/order-detail"
-import { useSupabase } from "../hooks/use-supabase"
+import { useSupabase, saveCurrentUser, getCurrentUser } from "../hooks/use-supabase"
+import { NotificationSystem, useNotifications } from "../components/notification-system"
 import Image from "next/image"
 
 // Tipos de datos
@@ -111,8 +112,10 @@ export default function OrderManagement() {
   const [showOrderDialog, setShowOrderDialog] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [activeTab, setActiveTab] = useState("active")
+  const [previousOrders, setPreviousOrders] = useState<Order[]>([])
 
   const { loading, error, fetchOrders, createOrder, updateOrder, deleteOrder, fetchUsers } = useSupabase()
+  const { notifications, addNotification, removeNotification } = useNotifications()
 
   // Cargar datos iniciales
   useEffect(() => {
@@ -122,14 +125,48 @@ export default function OrderManagement() {
       setOrders(ordersData)
       setUsers(usersData)
 
-      // Establecer usuario por defecto (Vale)
-      if (usersData.length > 0 && !currentUser) {
-        setCurrentUser(usersData.find((u) => u.name === "Vale") || usersData[0])
+      // Intentar cargar el usuario guardado en este dispositivo
+      const savedUser = getCurrentUser()
+      if (savedUser && usersData.some((u) => u.id === savedUser.id)) {
+        // Si el usuario guardado existe en la lista de usuarios, usarlo
+        setCurrentUser(savedUser)
+      } else {
+        // Si no hay usuario guardado o no existe, usar Vale por defecto
+        const defaultUser = usersData.find((u) => u.name === "Vale") || usersData[0]
+        if (defaultUser) {
+          setCurrentUser(defaultUser)
+          saveCurrentUser(defaultUser)
+        }
       }
     }
 
     loadData()
   }, [])
+
+  // Detectar cambios en pedidos para notificaciones
+  useEffect(() => {
+    if (previousOrders.length > 0 && orders.length > 0) {
+      // Detectar nuevos pedidos
+      const newOrders = orders.filter((order) => !previousOrders.some((prev) => prev.id === order.id))
+      newOrders.forEach((order) => {
+        addNotification("info", "Nuevo Pedido", `Se creó el pedido para ${order.clientName}`)
+      })
+
+      // Detectar cambios de estado
+      orders.forEach((order) => {
+        const previousOrder = previousOrders.find((prev) => prev.id === order.id)
+        if (previousOrder && previousOrder.status !== order.status) {
+          const statusLabel = STATUS_CONFIG[order.status].label
+          addNotification(
+            "success",
+            "Estado Actualizado",
+            `${order.clientName} - ${statusLabel}${order.armedBy ? ` por ${order.armedBy}` : ""}`,
+          )
+        }
+      })
+    }
+    setPreviousOrders(orders)
+  }, [orders])
 
   // Refrescar datos cada 30 segundos para sincronización
   useEffect(() => {
@@ -169,9 +206,12 @@ export default function OrderManagement() {
     const success = await createOrder(orderData, currentUser)
     if (success) {
       setShowOrderDialog(false)
+      addNotification("success", "Pedido Creado", `Presupuesto para ${orderData.clientName} creado exitosamente`)
       // Refrescar datos
       const ordersData = await fetchOrders()
       setOrders(ordersData)
+    } else {
+      addNotification("error", "Error", "No se pudo crear el pedido. Intenta nuevamente.")
     }
   }
 
@@ -182,6 +222,8 @@ export default function OrderManagement() {
       // Refrescar datos
       const ordersData = await fetchOrders()
       setOrders(ordersData)
+    } else {
+      addNotification("error", "Error", "No se pudo actualizar el pedido")
     }
   }
 
@@ -189,9 +231,22 @@ export default function OrderManagement() {
   const handleDeleteOrder = async (orderId: string) => {
     const success = await deleteOrder(orderId)
     if (success) {
+      addNotification("info", "Pedido Eliminado", "El pedido fue eliminado correctamente")
       // Refrescar datos
       const ordersData = await fetchOrders()
       setOrders(ordersData)
+    } else {
+      addNotification("error", "Error", "No se pudo eliminar el pedido")
+    }
+  }
+
+  // Manejar cambio de usuario y guardarlo en el dispositivo
+  const handleUserChange = (userId: string) => {
+    const selectedUser = users.find((u) => u.id === userId)
+    if (selectedUser) {
+      setCurrentUser(selectedUser)
+      saveCurrentUser(selectedUser) // Guardar en localStorage para este dispositivo
+      addNotification("info", "Usuario Cambiado", `Sesión cambiada a ${selectedUser.name}`)
     }
   }
 
@@ -325,7 +380,7 @@ export default function OrderManagement() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="w-full flex items-center justify-center gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  className="w-full flex items-center justify-center gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 bg-transparent"
                   onClick={(e) => {
                     e.stopPropagation()
                     setSelectedOrder(order)
@@ -394,6 +449,9 @@ export default function OrderManagement() {
                   <h1 className="text-3xl font-bold text-gray-900">Gestión de Pedidos</h1>
                   <p className="text-gray-600 mt-1">Control completo del proceso de pedidos</p>
                   {error && <p className="text-red-600 text-sm mt-1">Error: {error}</p>}
+                  <p className="text-sm text-blue-600 mt-1">
+                    👤 Sesión guardada en este dispositivo: <strong>{currentUser.name}</strong>
+                  </p>
                 </div>
               </div>
             </div>
@@ -401,7 +459,7 @@ export default function OrderManagement() {
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
               <select
                 value={currentUser.id}
-                onChange={(e) => setCurrentUser(users.find((u) => u.id === e.target.value) || users[0])}
+                onChange={(e) => handleUserChange(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {users.map((user) => (
@@ -521,6 +579,9 @@ export default function OrderManagement() {
           onUpdateOrder={handleUpdateOrder}
         />
       )}
+
+      {/* Sistema de Notificaciones */}
+      <NotificationSystem notifications={notifications} onRemove={removeNotification} />
     </div>
   )
 }

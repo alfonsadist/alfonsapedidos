@@ -67,7 +67,7 @@ CREATE TABLE returned_products (
 
 -- Crear tabla de historial
 CREATE TABLE order_history (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   action TEXT NOT NULL,
   user_name TEXT NOT NULL,
@@ -82,3 +82,4 @@ CREATE INDEX idx_products_order_id ON products(order_id);
 CREATE INDEX idx_missing_products_order_id ON missing_products(order_id);
 CREATE INDEX idx_returned_products_order_id ON returned_products(order_id);
 CREATE INDEX idx_order_history_order_id ON order_history(order_id);
+CREATE INDEX idx_users_name ON users(name);

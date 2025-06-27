@@ -1,7 +1,9 @@
--- Insertar usuarios del sistema (solo si no existen)
+-- Limpiar usuarios existentes
+DELETE FROM users;
+
+-- Insertar usuarios del sistema
 INSERT INTO users (name, role) VALUES 
   ('Vale', 'vale'),
   ('Lucho', 'armador'),
   ('Franco', 'armador'),
-  ('Negro', 'armador')
-ON CONFLICT (name) DO NOTHING;
+  ('Negro', 'armador');

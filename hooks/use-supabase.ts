@@ -30,6 +30,34 @@ const DEFAULT_USERS: User[] = [
   { id: "4", name: "Negro", role: "armador" },
 ]
 
+// Funciones para manejar la persistencia del usuario por dispositivo
+export const saveCurrentUser = (user: User) => {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("currentUser", JSON.stringify(user))
+  }
+}
+
+export const getCurrentUser = (): User | null => {
+  if (typeof window !== "undefined") {
+    const savedUser = localStorage.getItem("currentUser")
+    if (savedUser) {
+      try {
+        return JSON.parse(savedUser)
+      } catch (error) {
+        console.error("Error parsing saved user:", error)
+        localStorage.removeItem("currentUser")
+      }
+    }
+  }
+  return null
+}
+
+export const clearCurrentUser = () => {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("currentUser")
+  }
+}
+
 export function useSupabase() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -206,6 +234,9 @@ export function useSupabase() {
       }
 
       // Código de Supabase (cuando esté configurado)
+      console.log("Creando pedido:", orderId)
+
+      // Insertar orden
       const { error: orderError } = await supabase!.from("orders").insert({
         id: orderId,
         client_name: orderData.clientName,
@@ -215,33 +246,51 @@ export function useSupabase() {
         initial_notes: orderData.initialNotes,
       })
 
-      if (orderError) throw orderError
+      if (orderError) {
+        console.error("Error al insertar orden:", orderError)
+        throw orderError
+      }
 
-      const productsToInsert = orderData.products.map((p) => ({
-        id: p.id,
-        order_id: orderId,
-        code: p.code,
-        name: p.name,
-        quantity: p.quantity,
-        original_quantity: p.quantity,
-        is_checked: false,
-      }))
+      console.log("Orden creada, insertando productos...")
 
-      const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
+      // Insertar productos uno por uno para mejor control de errores
+      for (const product of orderData.products) {
+        const { error: productError } = await supabase!.from("products").insert({
+          id: product.id,
+          order_id: orderId,
+          code: product.code,
+          name: product.name,
+          quantity: product.quantity,
+          original_quantity: product.quantity,
+          is_checked: false,
+        })
 
-      if (productsError) throw productsError
+        if (productError) {
+          console.error("Error al insertar producto:", product, productError)
+          throw productError
+        }
+      }
 
+      console.log("Productos insertados, creando historial...")
+
+      // Insertar historial
       const { error: historyError } = await supabase!.from("order_history").insert({
+        id: Date.now().toString(),
         order_id: orderId,
         action: "Presupuesto creado y pedido listo para armar",
         user_name: currentUser.name,
         notes: orderData.initialNotes,
       })
 
-      if (historyError) throw historyError
+      if (historyError) {
+        console.error("Error al insertar historial:", historyError)
+        throw historyError
+      }
 
+      console.log("Pedido creado exitosamente:", orderId)
       return true
     } catch (err) {
+      console.error("Error completo al crear pedido:", err)
       setError(err instanceof Error ? err.message : "Error al crear pedido")
       return false
     } finally {
@@ -289,19 +338,21 @@ export function useSupabase() {
       // Eliminar productos existentes y reinsertar
       await supabase.from("products").delete().eq("order_id", order.id)
 
-      const productsToInsert = order.products.map((p) => ({
-        id: p.id,
-        order_id: order.id,
-        code: p.code,
-        name: p.name,
-        quantity: p.quantity,
-        original_quantity: p.originalQuantity,
-        is_checked: p.isChecked,
-      }))
+      if (order.products.length > 0) {
+        const productsToInsert = order.products.map((p) => ({
+          id: p.id,
+          order_id: order.id,
+          code: p.code,
+          name: p.name,
+          quantity: p.quantity,
+          original_quantity: p.originalQuantity,
+          is_checked: p.isChecked,
+        }))
 
-      const { error: productsError } = await supabase.from("products").insert(productsToInsert)
+        const { error: productsError } = await supabase.from("products").insert(productsToInsert)
 
-      if (productsError) throw productsError
+        if (productsError) throw productsError
+      }
 
       // Eliminar y reinsertar productos faltantes
       await supabase.from("missing_products").delete().eq("order_id", order.id)
