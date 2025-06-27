@@ -18,10 +18,12 @@ import {
   Edit3,
   History,
   Loader2,
+  User,
+  Clock,
 } from "lucide-react"
 import { OrderDialog } from "./components/order-dialog"
 import { OrderDetail } from "./components/order-detail"
-import { useSupabase, saveCurrentUser, getCurrentUser } from "../hooks/use-supabase"
+import { useSupabase, saveCurrentUser, getCurrentUser, useBroadcastNotifications } from "../hooks/use-supabase"
 import { NotificationSystem, useNotifications } from "../components/notification-system"
 import Image from "next/image"
 
@@ -36,7 +38,7 @@ export type OrderStatus =
   | "entregado"
   | "pagado"
 
-export type User = {
+export type UserRole = {
   id: string
   name: string
   role: "vale" | "armador"
@@ -90,6 +92,8 @@ export type Order = {
   controlledBy?: string // Quien controló el pedido
   awaitingPaymentVerification?: boolean // Para transferencias que esperan verificación de Vale
   initialNotes?: string // Observaciones iniciales de Vale
+  currentlyWorkingBy?: string // Quien está trabajando actualmente en el pedido
+  workingStartTime?: Date // Cuándo empezó a trabajar
 }
 
 // Estados y sus colores
@@ -106,16 +110,31 @@ const STATUS_CONFIG = {
 
 export default function OrderManagement() {
   const [orders, setOrders] = useState<Order[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [users, setUsers] = useState<UserRole[]>([])
+  const [currentUser, setCurrentUser] = useState<UserRole | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [showOrderDialog, setShowOrderDialog] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [activeTab, setActiveTab] = useState("active")
   const [previousOrders, setPreviousOrders] = useState<Order[]>([])
 
-  const { loading, error, fetchOrders, createOrder, updateOrder, deleteOrder, fetchUsers } = useSupabase()
+  const {
+    loading,
+    error,
+    fetchOrders,
+    createOrder,
+    updateOrder,
+    deleteOrder,
+    fetchUsers,
+    setWorkingOnOrder,
+    clearWorkingOnOrder,
+  } = useSupabase()
   const { notifications, addNotification, removeNotification } = useNotifications()
+
+  // Escuchar notificaciones broadcast
+  useBroadcastNotifications(currentUser?.name || "", (notification) => {
+    addNotification(notification.type, notification.title, notification.message)
+  })
 
   // Cargar datos iniciales
   useEffect(() => {
@@ -149,7 +168,9 @@ export default function OrderManagement() {
       // Detectar nuevos pedidos
       const newOrders = orders.filter((order) => !previousOrders.some((prev) => prev.id === order.id))
       newOrders.forEach((order) => {
-        addNotification("info", "Nuevo Pedido", `Se creó el pedido para ${order.clientName}`)
+        if (currentUser?.name !== "Vale") {
+          addNotification("info", "Nuevo Pedido", `Se creó el pedido para ${order.clientName}`)
+        }
       })
 
       // Detectar cambios de estado
@@ -157,23 +178,37 @@ export default function OrderManagement() {
         const previousOrder = previousOrders.find((prev) => prev.id === order.id)
         if (previousOrder && previousOrder.status !== order.status) {
           const statusLabel = STATUS_CONFIG[order.status].label
-          addNotification(
-            "success",
-            "Estado Actualizado",
-            `${order.clientName} - ${statusLabel}${order.armedBy ? ` por ${order.armedBy}` : ""}`,
-          )
+          const lastHistoryEntry = order.history[order.history.length - 1]
+          if (lastHistoryEntry && lastHistoryEntry.user !== currentUser?.name) {
+            addNotification(
+              "success",
+              "Estado Actualizado",
+              `${order.clientName} - ${statusLabel} por ${lastHistoryEntry.user}`,
+            )
+          }
+        }
+
+        // Detectar cuando alguien empieza a trabajar en un pedido
+        if (previousOrder && !previousOrder.currentlyWorkingBy && order.currentlyWorkingBy) {
+          if (order.currentlyWorkingBy !== currentUser?.name) {
+            addNotification(
+              "info",
+              "Trabajando en Pedido",
+              `${order.currentlyWorkingBy} está trabajando en el pedido de ${order.clientName}`,
+            )
+          }
         }
       })
     }
     setPreviousOrders(orders)
-  }, [orders])
+  }, [orders, currentUser])
 
-  // Refrescar datos cada 30 segundos para sincronización
+  // Refrescar datos cada 15 segundos para sincronización
   useEffect(() => {
     const interval = setInterval(async () => {
       const ordersData = await fetchOrders()
       setOrders(ordersData)
-    }, 30000)
+    }, 15000)
 
     return () => clearInterval(interval)
   }, [])
@@ -198,7 +233,15 @@ export default function OrderManagement() {
   const handleCreateOrder = async (
     orderData: Omit<
       Order,
-      "id" | "createdAt" | "history" | "status" | "missingProducts" | "isPaid" | "returnedProducts"
+      | "id"
+      | "createdAt"
+      | "history"
+      | "status"
+      | "missingProducts"
+      | "isPaid"
+      | "returnedProducts"
+      | "currentlyWorkingBy"
+      | "workingStartTime"
     >,
   ) => {
     if (!currentUser) return
@@ -217,7 +260,7 @@ export default function OrderManagement() {
 
   // Actualizar pedido
   const handleUpdateOrder = async (updatedOrder: Order) => {
-    const success = await updateOrder(updatedOrder)
+    const success = await updateOrder(updatedOrder, currentUser)
     if (success) {
       // Refrescar datos
       const ordersData = await fetchOrders()
@@ -250,18 +293,47 @@ export default function OrderManagement() {
     }
   }
 
+  // Manejar cuando alguien abre un pedido para trabajar
+  const handleOrderSelect = async (order: Order) => {
+    // No marcar automáticamente como trabajando al abrir
+    setSelectedOrder(order)
+  }
+
+  // Verificar si un usuario puede trabajar en un pedido
+  const canUserWorkOnOrder = (order: Order, user: UserRole) => {
+    // Vale siempre puede trabajar en sus pedidos
+    if (user.role === "vale") return true
+
+    // Si alguien ya está trabajando en el pedido y no es el usuario actual
+    if (order.currentlyWorkingBy && order.currentlyWorkingBy !== user.name) {
+      return false
+    }
+    return true
+  }
+
+  // Obtener el tiempo que alguien lleva trabajando en un pedido
+  const getWorkingTime = (order: Order) => {
+    if (!order.workingStartTime) return ""
+    const start = order.workingStartTime instanceof Date ? order.workingStartTime : new Date(order.workingStartTime)
+    if (Number.isNaN(start.getTime())) return ""
+    const diffMs = Date.now() - start.getTime()
+    const minutes = Math.floor(diffMs / 60000)
+    return `${minutes} min`
+  }
+
   const getStatusIcon = (status: OrderStatus) => {
     const IconComponent = STATUS_CONFIG[status].icon
     return <IconComponent className="w-4 h-4" />
   }
 
   const getOrderPriorityColor = (order: Order) => {
+    if (order.currentlyWorkingBy) return "border-l-4 border-l-blue-500"
     if (order.missingProducts.length > 0) return "border-l-4 border-l-orange-500"
-    if (order.awaitingPaymentVerification) return "border-l-4 border-l-blue-500"
+    if (order.awaitingPaymentVerification) return "border-l-4 border-l-purple-500"
     return ""
   }
 
-  const getNextActionForUser = (order: Order, user: User) => {
+  const getNextActionForUser = (order: Order, user: UserRole) => {
     if (user.role === "armador") {
       if (order.status === "en_armado") {
         return { label: "Armar Pedido", icon: Package }
@@ -302,12 +374,15 @@ export default function OrderManagement() {
     if (!currentUser) return null
 
     const nextAction = getNextActionForUser(order, currentUser)
+    const canWork = canUserWorkOnOrder(order, currentUser)
 
     return (
       <Card
         key={order.id}
-        className={`cursor-pointer hover:shadow-lg transition-shadow ${getOrderPriorityColor(order)}`}
-        onClick={() => setSelectedOrder(order)}
+        className={`cursor-pointer hover:shadow-lg transition-shadow ${getOrderPriorityColor(order)} ${
+          !canWork ? "opacity-75" : ""
+        }`}
+        onClick={() => handleOrderSelect(order)}
       >
         <CardHeader className="pb-3">
           <div className="flex justify-between items-start">
@@ -323,6 +398,18 @@ export default function OrderManagement() {
               {order.awaitingPaymentVerification && (
                 <Badge variant="outline" className="text-xs">
                   Esperando verificación
+                </Badge>
+              )}
+              {order.currentlyWorkingBy && (
+                <Badge variant="secondary" className="text-xs flex items-center gap-1">
+                  <User className="w-3 h-3" />
+                  {order.currentlyWorkingBy}
+                  {order.workingStartTime && (
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {getWorkingTime(order)}
+                    </span>
+                  )}
                 </Badge>
               )}
             </div>
@@ -374,8 +461,18 @@ export default function OrderManagement() {
               </div>
             )}
 
+            {/* Advertencia si alguien más está trabajando */}
+            {!canWork && order.currentlyWorkingBy && (
+              <div className="pt-2 border-t">
+                <div className="text-xs text-orange-600 bg-orange-50 p-2 rounded flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  {order.currentlyWorkingBy} está trabajando en este pedido
+                </div>
+              </div>
+            )}
+
             {/* Botón de acción siguiente */}
-            {nextAction && (
+            {nextAction && canWork && (
               <div className="pt-2 border-t">
                 <Button
                   variant="outline"
@@ -383,7 +480,7 @@ export default function OrderManagement() {
                   className="w-full flex items-center justify-center gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 bg-transparent"
                   onClick={(e) => {
                     e.stopPropagation()
-                    setSelectedOrder(order)
+                    handleOrderSelect(order)
                   }}
                 >
                   <nextAction.icon className="w-4 h-4" />
@@ -575,8 +672,18 @@ export default function OrderManagement() {
         <OrderDetail
           order={selectedOrder}
           currentUser={currentUser}
-          onClose={() => setSelectedOrder(null)}
+          onClose={async () => {
+            // Limpiar el estado de trabajo cuando se cierra el diálogo
+            if (selectedOrder.currentlyWorkingBy === currentUser.name) {
+              await clearWorkingOnOrder(selectedOrder.id, currentUser.name, currentUser.role)
+              const ordersData = await fetchOrders()
+              setOrders(ordersData)
+            }
+            setSelectedOrder(null)
+          }}
           onUpdateOrder={handleUpdateOrder}
+          onSetWorking={(orderId) => setWorkingOnOrder(orderId, currentUser.name, currentUser.role)}
+          onClearWorking={(orderId) => clearWorkingOnOrder(orderId, currentUser.name, currentUser.role)}
         />
       )}
 

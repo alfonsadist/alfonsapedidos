@@ -22,7 +22,9 @@ import {
   FileText,
   Plus,
   Trash2,
+  Clock,
 } from "lucide-react"
+import { UserIcon } from "lucide-react"
 import type { Order, User, HistoryEntry, OrderStatus, Product } from "../page"
 import { SuccessAlert } from "./success-alert"
 import { ConfirmationDialog } from "./confirmation-dialog"
@@ -33,20 +35,61 @@ interface OrderDetailProps {
   currentUser: User
   onClose: () => void
   onUpdateOrder: (order: Order) => void
+  onSetWorking?: (orderId: string) => void
+  onClearWorking?: (orderId: string) => void
 }
 
 const STATUS_CONFIG = {
-  en_armado: { label: "En Armado", color: "bg-yellow-500", icon: Package },
-  armado: { label: "Armado", color: "bg-blue-500", icon: CheckCircle },
-  armado_controlado: { label: "Armado Controlado", color: "bg-green-500", icon: CheckCircle },
-  facturado: { label: "Facturado", color: "bg-purple-500", icon: DollarSign },
-  factura_controlada: { label: "Factura Controlada", color: "bg-indigo-500", icon: CheckCircle },
-  en_transito: { label: "En Tránsito", color: "bg-orange-500", icon: Truck },
-  entregado: { label: "Entregado", color: "bg-green-600", icon: CheckCircle },
-  pagado: { label: "Pagado", color: "bg-green-700", icon: DollarSign },
+  en_armado: {
+    label: "En Armado",
+    color: "bg-blue-500",
+    icon: Package,
+  },
+  armado: {
+    label: "Armado",
+    color: "bg-green-500",
+    icon: CheckCircle,
+  },
+  armado_controlado: {
+    label: "Armado Controlado",
+    color: "bg-purple-500",
+    icon: CheckCircle,
+  },
+  facturado: {
+    label: "Facturado",
+    color: "bg-orange-500",
+    icon: DollarSign,
+  },
+  factura_controlada: {
+    label: "Factura Controlada",
+    color: "bg-yellow-500",
+    icon: DollarSign,
+  },
+  en_transito: {
+    label: "En Tránsito",
+    color: "bg-sky-500",
+    icon: Truck,
+  },
+  entregado: {
+    label: "Entregado",
+    color: "bg-slate-500",
+    icon: CheckCircle,
+  },
+  pagado: {
+    label: "Pagado",
+    color: "bg-emerald-500",
+    icon: CheckCircle,
+  },
 }
 
-export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: OrderDetailProps) {
+export function OrderDetail({
+  order,
+  currentUser,
+  onClose,
+  onUpdateOrder,
+  onSetWorking,
+  onClearWorking,
+}: OrderDetailProps) {
   const [notes, setNotes] = useState("")
   const [editingProduct, setEditingProduct] = useState<string | null>(null)
   const [editQuantity, setEditQuantity] = useState<number>(0)
@@ -73,6 +116,24 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   const [localProducts, setLocalProducts] = useState(order.products)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
+  // Verificar si alguien más está trabajando en el pedido (solo para armadores)
+  const isBeingWorkedOnByOther =
+    order.currentlyWorkingBy && order.currentlyWorkingBy !== currentUser.name && currentUser.role === "armador"
+
+  // Función para marcar que está trabajando (solo al empezar a armar)
+  const startWorking = () => {
+    if (currentUser.role === "armador" && onSetWorking) {
+      onSetWorking(order.id)
+    }
+  }
+
+  // Función para limpiar el estado de trabajo
+  const stopWorking = () => {
+    if (currentUser.role === "armador" && onClearWorking) {
+      onClearWorking(order.id)
+    }
+  }
+
   // Sincronizar estado local cuando cambia la orden
   useEffect(() => {
     // Si estamos en modo control (armado o facturado), resetear los checkboxes
@@ -87,8 +148,23 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
     setHasUnsavedChanges(false)
   }, [order.products, order.status, currentUser.name, currentUser.role, order.armedBy])
 
+  // Obtener el tiempo que alguien lleva trabajando
+  const getWorkingTime = () => {
+    if (!order.workingStartTime) return ""
+    const now = new Date()
+    const diff = now.getTime() - order.workingStartTime.getTime()
+    const minutes = Math.floor(diff / 60000)
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+
+    if (hours > 0) {
+      return `${hours}h ${remainingMinutes}m`
+    }
+    return `${minutes}m`
+  }
+
   const addHistoryEntry = (action: string, notes?: string): HistoryEntry => ({
-    id: Date.now().toString(),
+    id: `hist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     action,
     user: currentUser.name,
     timestamp: new Date(),
@@ -139,7 +215,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   // Agregar producto (solo para Vale en estado en_armado)
   const addProduct = () => {
     const newProduct: Product = {
-      id: Date.now().toString(),
+      id: `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: "",
       quantity: 1,
       originalQuantity: 1,
@@ -172,8 +248,6 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
     setLocalProducts(updatedLocalProducts)
     setHasUnsavedChanges(true)
   }
-
-  // Modificar la función savePresupuestoChanges para manejar el recálculo de faltantes cuando Vale está facturando
 
   // Guardar cambios de Vale en presupuesto
   const savePresupuestoChanges = () => {
@@ -280,6 +354,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   }
 
   const confirmArmado = () => {
+    startWorking() // Marcar como trabajando al empezar a armar
     // Calcular faltantes basado en los productos locales marcados
     const missingProducts = []
     const historyEntries = []
@@ -317,8 +392,12 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
       missingProducts: [...order.missingProducts, ...missingProducts],
       status: "armado",
       armedBy: currentUser.name,
+      currentlyWorkingBy: undefined, // Limpiar el estado de trabajo
+      workingStartTime: undefined,
       history: [...order.history, ...historyEntries, addHistoryEntry("Pedido armado", notes || undefined)],
     }
+
+    stopWorking() // Limpiar estado al terminar
 
     onUpdateOrder(updatedOrder)
     setNotes("")
@@ -380,6 +459,9 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   }
 
   const canUserPerformAction = (action: string) => {
+    // Si alguien más está trabajando en el pedido, no permitir acciones
+    if (isBeingWorkedOnByOther) return false
+
     switch (action) {
       case "arm":
         return currentUser.role === "armador" && order.status === "en_armado"
@@ -416,6 +498,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   }
 
   const confirmControlArmado = () => {
+    startWorking() // Marcar como trabajando al empezar control
     // Calcular faltantes basado en los productos locales marcados durante el control
     const missingProducts = [...order.missingProducts] // Mantener faltantes existentes
     const historyEntries = []
@@ -470,8 +553,12 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
       missingProducts: missingProducts,
       status: "armado_controlado",
       controlledBy: currentUser.name,
+      currentlyWorkingBy: undefined, // Limpiar el estado de trabajo
+      workingStartTime: undefined,
       history: [...order.history, ...historyEntries, addHistoryEntry("Armado controlado", notes || undefined)],
     }
+
+    stopWorking() // Limpiar al terminar
 
     onUpdateOrder(updatedOrder)
     setNotes("")
@@ -486,6 +573,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
   }
 
   const confirmControlFactura = () => {
+    startWorking() // Marcar como trabajando al empezar control
     // Similar al control de armado pero para facturas
     const missingProducts = [...order.missingProducts]
     const historyEntries = []
@@ -535,8 +623,12 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
       products: localProducts,
       missingProducts: missingProducts,
       status: "factura_controlada",
+      currentlyWorkingBy: undefined, // Limpiar el estado de trabajo
+      workingStartTime: undefined,
       history: [...order.history, ...historyEntries, addHistoryEntry("Factura controlada", notes || undefined)],
     }
+
+    stopWorking() // Limpiar al terminar
 
     onUpdateOrder(updatedOrder)
     setNotes("")
@@ -580,6 +672,8 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
       products: localProducts,
       returnedProducts: [...order.returnedProducts, ...returnedProducts],
       status: "entregado",
+      currentlyWorkingBy: undefined, // Limpiar el estado de trabajo
+      workingStartTime: undefined,
       history: [...order.history, ...historyEntries, addHistoryEntry("Pedido entregado", notes || undefined)],
     }
 
@@ -601,6 +695,18 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
 
   const getAvailableActions = () => {
     const actions = []
+
+    // Si alguien más está trabajando, mostrar mensaje
+    if (isBeingWorkedOnByOther) {
+      return [
+        {
+          label: `${order.currentlyWorkingBy} está trabajando (${getWorkingTime()})`,
+          action: () => {},
+          variant: "outline" as const,
+          disabled: true,
+        },
+      ]
+    }
 
     // Lógica para editar presupuesto (Vale en estado en_armado)
     if (canUserPerformAction("edit_presupuesto") && hasUnsavedChanges) {
@@ -873,7 +979,13 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
 
   return (
     <>
-      <Dialog open={true} onOpenChange={onClose}>
+      <Dialog
+        open={true}
+        onOpenChange={() => {
+          stopWorking()
+          onClose()
+        }}
+      >
         <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex justify-between items-start">
@@ -882,6 +994,20 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                 <p className="text-sm text-gray-600 mt-1">ID: {order.id}</p>
                 {hasUnsavedChanges && <p className="text-sm text-orange-600 mt-1">⚠️ Hay cambios sin guardar</p>}
                 {copyMessage && <p className="text-sm text-green-600 mt-1">✓ {copyMessage}</p>}
+                {isBeingWorkedOnByOther && currentUser.role === "armador" && (
+                  <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
+                    <p className="text-sm text-blue-800 flex items-center gap-2">
+                      <UserIcon className="w-4 h-4" />
+                      <strong>{order.currentlyWorkingBy}</strong> está trabajando en este pedido
+                      {order.workingStartTime && (
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {getWorkingTime()}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="flex flex-col items-end gap-2">
                 <Badge className={`${STATUS_CONFIG[order.status].color} text-white flex items-center gap-1`}>
@@ -939,8 +1065,13 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                 <CardHeader>
                   <div className="flex justify-between items-center">
                     <CardTitle className="text-lg">Productos</CardTitle>
-                    {canUserPerformAction("edit_presupuesto") && (
-                      <Button onClick={addProduct} size="sm" variant="outline" className="flex items-center gap-2">
+                    {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther && (
+                      <Button
+                        onClick={addProduct}
+                        size="sm"
+                        variant="outline"
+                        className="flex items-center gap-2 bg-transparent"
+                      >
                         <Plus className="w-4 h-4" />
                         {order.status === "armado_controlado" ? "Agregar Producto" : "Agregar"}
                       </Button>
@@ -953,29 +1084,37 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                       <div
                         key={product.id}
                         className={`flex flex-col gap-3 p-3 border rounded-lg transition-colors ${
-                          canUserPerformAction("edit_products") && !canUserPerformAction("edit_presupuesto")
+                          canUserPerformAction("edit_products") &&
+                          !canUserPerformAction("edit_presupuesto") &&
+                          !isBeingWorkedOnByOther
                             ? product.isChecked
                               ? "bg-green-50 border-green-200 cursor-pointer"
                               : "hover:bg-gray-50 cursor-pointer"
                             : ""
-                        }`}
+                        } ${isBeingWorkedOnByOther ? "opacity-60" : ""}`}
                         onClick={() => {
-                          if (canUserPerformAction("edit_products") && !canUserPerformAction("edit_presupuesto")) {
+                          if (
+                            canUserPerformAction("edit_products") &&
+                            !canUserPerformAction("edit_presupuesto") &&
+                            !isBeingWorkedOnByOther
+                          ) {
                             toggleLocalProductCheck(product.id)
                           }
                         }}
                       >
                         <div className="flex items-center gap-3">
-                          {canUserPerformAction("edit_products") && !canUserPerformAction("edit_presupuesto") && (
-                            <Checkbox
-                              checked={product.isChecked || false}
-                              onCheckedChange={() => toggleLocalProductCheck(product.id)}
-                              className="pointer-events-none"
-                            />
-                          )}
+                          {canUserPerformAction("edit_products") &&
+                            !canUserPerformAction("edit_presupuesto") &&
+                            !isBeingWorkedOnByOther && (
+                              <Checkbox
+                                checked={product.isChecked || false}
+                                onCheckedChange={() => toggleLocalProductCheck(product.id)}
+                                className="pointer-events-none"
+                              />
+                            )}
 
                           <div className="flex-1">
-                            {canUserPerformAction("edit_presupuesto") ? (
+                            {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
                               <div className="space-y-2">
                                 <div className="flex gap-2">
                                   {product.code !== undefined && (
@@ -1048,7 +1187,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                               </div>
                             ) : (
                               <div className="flex items-center gap-2">
-                                {canUserPerformAction("edit_presupuesto") ? (
+                                {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
                                   <Input
                                     type="number"
                                     value={product.quantity}
@@ -1066,34 +1205,38 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                                 {product.originalQuantity && product.originalQuantity !== product.quantity && (
                                   <span className="text-xs text-gray-500">(orig: {product.originalQuantity})</span>
                                 )}
-                                {canUserPerformAction("edit_products") && !canUserPerformAction("edit_presupuesto") && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setEditingProduct(product.id)
-                                      setEditQuantity(product.quantity)
-                                    }}
-                                    title="Editar cantidad"
-                                  >
-                                    <Edit3 className="w-3 h-3" />
-                                  </Button>
-                                )}
-                                {canUserPerformAction("edit_presupuesto") && localProducts.length > 1 && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      removeProduct(product.id)
-                                    }}
-                                    className="text-red-600 hover:text-red-700"
-                                    title="Eliminar producto"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </Button>
-                                )}
+                                {canUserPerformAction("edit_products") &&
+                                  !canUserPerformAction("edit_presupuesto") &&
+                                  !isBeingWorkedOnByOther && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setEditingProduct(product.id)
+                                        setEditQuantity(product.quantity)
+                                      }}
+                                      title="Editar cantidad"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                    </Button>
+                                  )}
+                                {canUserPerformAction("edit_presupuesto") &&
+                                  localProducts.length > 1 &&
+                                  !isBeingWorkedOnByOther && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        removeProduct(product.id)
+                                      }}
+                                      className="text-red-600 hover:text-red-700"
+                                      title="Eliminar producto"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                  )}
                               </div>
                             )}
                           </div>
@@ -1118,7 +1261,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                           size="sm"
                           variant="outline"
                           onClick={copyMissingProducts}
-                          className="flex items-center gap-1"
+                          className="flex items-center gap-1 bg-transparent"
                         >
                           <Copy className="w-3 h-3" />
                           Copiar
@@ -1208,6 +1351,7 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                       onChange={(e) => setNotes(e.target.value)}
                       placeholder="Agregar observaciones..."
                       rows={3}
+                      disabled={isBeingWorkedOnByOther}
                     />
                   </div>
 
@@ -1226,8 +1370,12 @@ export function OrderDetail({ order, currentUser, onClose, onUpdateOrder }: Orde
                   </div>
 
                   {/* Botón para copiar resumen de factura (solo para Vale después del control) */}
-                  {currentUser.role === "vale" && order.status === "armado_controlado" && (
-                    <Button onClick={copyInvoiceSummary} variant="outline" className="w-full flex items-center gap-2">
+                  {currentUser.role === "vale" && order.status === "armado_controlado" && !isBeingWorkedOnByOther && (
+                    <Button
+                      onClick={copyInvoiceSummary}
+                      variant="outline"
+                      className="w-full flex items-center gap-2 bg-transparent"
+                    >
                       <FileText className="w-4 h-4" />
                       Copiar Resumen de Factura
                     </Button>

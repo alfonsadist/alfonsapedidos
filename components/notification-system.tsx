@@ -1,7 +1,9 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useEffect } from "react"
-import { X, CheckCircle, AlertCircle, Info } from "lucide-react"
+import { X, CheckCircle, AlertCircle, Info, User, Package } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export type NotificationType = "success" | "error" | "info" | "warning"
@@ -14,6 +16,7 @@ export interface Notification {
   timestamp: Date
   autoHide?: boolean
   duration?: number
+  icon?: React.ReactNode
 }
 
 interface NotificationSystemProps {
@@ -21,7 +24,9 @@ interface NotificationSystemProps {
   onRemove: (id: string) => void
 }
 
-const getNotificationIcon = (type: NotificationType) => {
+const getNotificationIcon = (type: NotificationType, customIcon?: React.ReactNode) => {
+  if (customIcon) return customIcon
+
   switch (type) {
     case "success":
       return <CheckCircle className="w-5 h-5 text-green-600" />
@@ -38,14 +43,14 @@ const getNotificationIcon = (type: NotificationType) => {
 const getNotificationStyles = (type: NotificationType) => {
   switch (type) {
     case "success":
-      return "border-green-200 bg-green-50"
+      return "border-green-200 bg-green-50 shadow-green-100"
     case "error":
-      return "border-red-200 bg-red-50"
+      return "border-red-200 bg-red-50 shadow-red-100"
     case "warning":
-      return "border-orange-200 bg-orange-50"
+      return "border-orange-200 bg-orange-50 shadow-orange-100"
     case "info":
     default:
-      return "border-blue-200 bg-blue-50"
+      return "border-blue-200 bg-blue-50 shadow-blue-100"
   }
 }
 
@@ -53,7 +58,7 @@ export function NotificationSystem({ notifications, onRemove }: NotificationSyst
   useEffect(() => {
     notifications.forEach((notification) => {
       if (notification.autoHide !== false) {
-        const duration = notification.duration || 5000
+        const duration = notification.duration || 6000
         const timer = setTimeout(() => {
           onRemove(notification.id)
         }, duration)
@@ -66,26 +71,32 @@ export function NotificationSystem({ notifications, onRemove }: NotificationSyst
   if (notifications.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm">
-      {notifications.map((notification) => (
+    <div className="fixed bottom-4 right-4 z-50 space-y-3 max-w-sm">
+      {notifications.slice(-5).map((notification, index) => (
         <div
           key={notification.id}
-          className={`border rounded-lg p-4 shadow-lg transition-all duration-300 ease-in-out ${getNotificationStyles(
+          className={`border rounded-lg p-4 shadow-lg transition-all duration-500 ease-in-out transform ${getNotificationStyles(
             notification.type,
-          )}`}
+          )} ${index === notifications.length - 1 ? "animate-in slide-in-from-right-full" : ""}`}
+          style={{
+            animationDelay: `${index * 100}ms`,
+          }}
         >
           <div className="flex items-start gap-3">
-            {getNotificationIcon(notification.type)}
+            {getNotificationIcon(notification.type, notification.icon)}
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-medium text-gray-900">{notification.title}</h4>
-              <p className="text-sm text-gray-700 mt-1">{notification.message}</p>
-              <p className="text-xs text-gray-500 mt-1">{notification.timestamp.toLocaleTimeString()}</p>
+              <h4 className="text-sm font-semibold text-gray-900 leading-tight">{notification.title}</h4>
+              <p className="text-sm text-gray-700 mt-1 leading-relaxed">{notification.message}</p>
+              <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
+                <span>•</span>
+                {notification.timestamp.toLocaleTimeString()}
+              </p>
             </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => onRemove(notification.id)}
-              className="h-6 w-6 p-0 hover:bg-gray-200"
+              className="h-6 w-6 p-0 hover:bg-gray-200 rounded-full flex-shrink-0"
             >
               <X className="w-4 h-4" />
             </Button>
@@ -104,19 +115,23 @@ export function useNotifications() {
     type: NotificationType,
     title: string,
     message: string,
-    options?: { autoHide?: boolean; duration?: number },
+    options?: { autoHide?: boolean; duration?: number; icon?: React.ReactNode },
   ) => {
     const notification: Notification = {
-      id: Date.now().toString(),
+      id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type,
       title,
       message,
       timestamp: new Date(),
       autoHide: options?.autoHide,
       duration: options?.duration,
+      icon: options?.icon,
     }
 
     setNotifications((prev) => [...prev, notification])
+
+    // Limitar a máximo 10 notificaciones
+    setNotifications((prev) => prev.slice(-10))
   }
 
   const removeNotification = (id: string) => {
@@ -127,10 +142,43 @@ export function useNotifications() {
     setNotifications([])
   }
 
+  // Funciones de conveniencia para tipos específicos de notificaciones
+  const notifyNewOrder = (clientName: string, createdBy: string) => {
+    addNotification("info", "Nuevo Presupuesto", `${createdBy} creó un presupuesto para ${clientName}`, {
+      icon: <Package className="w-5 h-5 text-blue-600" />,
+      duration: 8000,
+    })
+  }
+
+  const notifyStatusChange = (clientName: string, status: string, changedBy: string) => {
+    addNotification("success", "Estado Actualizado", `${changedBy} actualizó ${clientName} - ${status}`, {
+      icon: <CheckCircle className="w-5 h-5 text-green-600" />,
+      duration: 7000,
+    })
+  }
+
+  const notifyUserWorking = (userName: string, clientName: string) => {
+    addNotification("info", "Trabajando en Pedido", `${userName} está trabajando en el pedido de ${clientName}`, {
+      icon: <User className="w-5 h-5 text-blue-600" />,
+      duration: 10000,
+    })
+  }
+
+  const notifyError = (message: string) => {
+    addNotification("error", "Error", message, {
+      duration: 8000,
+      autoHide: false, // Los errores no se ocultan automáticamente
+    })
+  }
+
   return {
     notifications,
     addNotification,
     removeNotification,
     clearAll,
+    notifyNewOrder,
+    notifyStatusChange,
+    notifyUserWorking,
+    notifyError,
   }
 }

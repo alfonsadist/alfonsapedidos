@@ -13,14 +13,14 @@ export const supabase =
   supabaseUrl && supabaseKey && supabaseUrl.startsWith("http") ? createClient(supabaseUrl, supabaseKey) : null
 
 // Si no hay Supabase configurado, mostrar advertencia
-if (!supabase) {
-  console.warn(
-    "⚠️ Supabase no configurado. Usando datos locales.\n" +
-      "Para usar la base de datos real, configura:\n" +
-      "- NEXT_PUBLIC_SUPABASE_URL\n" +
-      "- NEXT_PUBLIC_SUPABASE_ANON_KEY",
-  )
-}
+// if (!supabase) {
+//   console.warn(
+//     "⚠️ Supabase no configurado. Usando datos locales.\n" +
+//       "Para usar la base de datos real, configura:\n" +
+//       "- NEXT_PUBLIC_SUPABASE_URL\n" +
+//       "- NEXT_PUBLIC_SUPABASE_ANON_KEY",
+//   )
+// }
 
 // Usuarios por defecto (fallback si no hay Supabase)
 const DEFAULT_USERS: User[] = [
@@ -58,6 +58,13 @@ export const clearCurrentUser = () => {
   }
 }
 
+// Función para generar IDs únicos
+const generateUniqueId = (prefix = "") => {
+  const timestamp = Date.now()
+  const random = Math.random().toString(36).substr(2, 9)
+  return `${prefix}${timestamp}-${random}`
+}
+
 export function useSupabase() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,6 +85,7 @@ export function useSupabase() {
           const parsedOrders = JSON.parse(savedOrders).map((order: any) => ({
             ...order,
             createdAt: new Date(order.createdAt),
+            workingStartTime: order.workingStartTime ? new Date(order.workingStartTime) : undefined,
             history: order.history.map((h: any) => ({
               ...h,
               timestamp: new Date(h.timestamp),
@@ -144,6 +152,8 @@ export function useSupabase() {
           awaitingPaymentVerification: orderData.awaiting_payment_verification,
           initialNotes: orderData.initial_notes,
           createdAt: new Date(orderData.created_at),
+          currentlyWorkingBy: orderData.currently_working_by,
+          workingStartTime: orderData.working_start_time ? new Date(orderData.working_start_time) : undefined,
           products: productsData.map((p) => ({
             id: p.id,
             code: p.code,
@@ -179,6 +189,7 @@ export function useSupabase() {
 
       return orders
     } catch (err) {
+      console.error("Error fetching orders:", err)
       setError(err instanceof Error ? err.message : "Error desconocido")
       return []
     } finally {
@@ -190,7 +201,15 @@ export function useSupabase() {
   const createOrder = async (
     orderData: Omit<
       Order,
-      "id" | "createdAt" | "history" | "status" | "missingProducts" | "isPaid" | "returnedProducts"
+      | "id"
+      | "createdAt"
+      | "history"
+      | "status"
+      | "missingProducts"
+      | "isPaid"
+      | "returnedProducts"
+      | "currentlyWorkingBy"
+      | "workingStartTime"
     >,
     currentUser: User,
   ): Promise<boolean> => {
@@ -198,7 +217,8 @@ export function useSupabase() {
     setError(null)
 
     try {
-      const orderId = `PED-${Date.now()}`
+      const orderId = generateUniqueId("PED-")
+      console.log("Creando pedido con ID:", orderId)
 
       if (useLocalStorage) {
         // Usar localStorage como fallback
@@ -212,7 +232,7 @@ export function useSupabase() {
           createdAt: new Date(),
           history: [
             {
-              id: Date.now().toString(),
+              id: generateUniqueId("HIST-"),
               action: "Presupuesto creado y pedido listo para armar",
               user: currentUser.name,
               timestamp: new Date(),
@@ -221,6 +241,7 @@ export function useSupabase() {
           ],
           products: orderData.products.map((p) => ({
             ...p,
+            id: p.id || generateUniqueId("PROD-"),
             originalQuantity: p.quantity,
             isChecked: false,
           })),
@@ -230,11 +251,20 @@ export function useSupabase() {
         const orders = savedOrders ? JSON.parse(savedOrders) : []
         orders.push(newOrder)
         localStorage.setItem("orders", JSON.stringify(orders))
+
+        // Broadcast notification
+        broadcastNotification({
+          type: "info",
+          title: "Nuevo Presupuesto",
+          message: `Vale creó un presupuesto para ${orderData.clientName}`,
+          excludeUser: currentUser.name,
+        })
+
         return true
       }
 
       // Código de Supabase (cuando esté configurado)
-      console.log("Creando pedido:", orderId)
+      console.log("Insertando orden en Supabase...")
 
       // Insertar orden
       const { error: orderError } = await supabase!.from("orders").insert({
@@ -253,29 +283,32 @@ export function useSupabase() {
 
       console.log("Orden creada, insertando productos...")
 
-      // Insertar productos uno por uno para mejor control de errores
-      for (const product of orderData.products) {
-        const { error: productError } = await supabase!.from("products").insert({
-          id: product.id,
-          order_id: orderId,
-          code: product.code,
-          name: product.name,
-          quantity: product.quantity,
-          original_quantity: product.quantity,
-          is_checked: false,
-        })
+      // Insertar productos con IDs únicos
+      const productsToInsert = orderData.products.map((product) => ({
+        id: product.id || generateUniqueId("PROD-"),
+        order_id: orderId,
+        code: product.code,
+        name: product.name,
+        quantity: product.quantity,
+        original_quantity: product.quantity,
+        is_checked: false,
+      }))
 
-        if (productError) {
-          console.error("Error al insertar producto:", product, productError)
-          throw productError
-        }
+      console.log("Productos a insertar:", productsToInsert)
+
+      const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
+
+      if (productsError) {
+        console.error("Error al insertar productos:", productsError)
+        throw productsError
       }
 
       console.log("Productos insertados, creando historial...")
 
       // Insertar historial
+      const historyId = generateUniqueId("HIST-")
       const { error: historyError } = await supabase!.from("order_history").insert({
-        id: Date.now().toString(),
+        id: historyId,
         order_id: orderId,
         action: "Presupuesto creado y pedido listo para armar",
         user_name: currentUser.name,
@@ -286,6 +319,14 @@ export function useSupabase() {
         console.error("Error al insertar historial:", historyError)
         throw historyError
       }
+
+      // Broadcast notification
+      broadcastNotification({
+        type: "info",
+        title: "Nuevo Presupuesto",
+        message: `Vale creó un presupuesto para ${orderData.clientName}`,
+        excludeUser: currentUser.name,
+      })
 
       console.log("Pedido creado exitosamente:", orderId)
       return true
@@ -298,8 +339,81 @@ export function useSupabase() {
     }
   }
 
+  // Marcar que un usuario está trabajando en un pedido
+  const setWorkingOnOrder = async (orderId: string, userName: string, userRole: string): Promise<boolean> => {
+    // Solo los armadores pueden marcar que están trabajando
+    if (userRole !== "armador") return true
+
+    try {
+      if (useLocalStorage) {
+        const savedOrders = localStorage.getItem("orders")
+        const orders = savedOrders ? JSON.parse(savedOrders) : []
+        const orderIndex = orders.findIndex((o: Order) => o.id === orderId)
+
+        if (orderIndex >= 0) {
+          orders[orderIndex].currentlyWorkingBy = userName
+          orders[orderIndex].workingStartTime = new Date()
+          localStorage.setItem("orders", JSON.stringify(orders))
+        }
+        return true
+      }
+
+      const { error } = await supabase!
+        .from("orders")
+        .update({
+          currently_working_by: userName,
+          working_start_time: new Date().toISOString(),
+        })
+        .eq("id", orderId)
+
+      if (error) throw error
+      return true
+    } catch (err) {
+      console.error("Error setting working status:", err)
+      return false
+    }
+  }
+
+  // Limpiar que un usuario está trabajando en un pedido
+  const clearWorkingOnOrder = async (orderId: string, userName?: string, userRole?: string): Promise<boolean> => {
+    // Solo los armadores pueden limpiar el estado de trabajo
+    if (userRole && userRole !== "armador") return true
+
+    try {
+      if (useLocalStorage) {
+        const savedOrders = localStorage.getItem("orders")
+        const orders = savedOrders ? JSON.parse(savedOrders) : []
+        const orderIndex = orders.findIndex((o: Order) => o.id === orderId)
+
+        if (orderIndex >= 0) {
+          // Solo limpiar si el usuario actual es quien está trabajando o no se especifica usuario
+          if (!userName || orders[orderIndex].currentlyWorkingBy === userName) {
+            orders[orderIndex].currentlyWorkingBy = undefined
+            orders[orderIndex].workingStartTime = undefined
+            localStorage.setItem("orders", JSON.stringify(orders))
+          }
+        }
+        return true
+      }
+
+      const { error } = await supabase!
+        .from("orders")
+        .update({
+          currently_working_by: null,
+          working_start_time: null,
+        })
+        .eq("id", orderId)
+
+      if (error) throw error
+      return true
+    } catch (err) {
+      console.error("Error clearing working status:", err)
+      return false
+    }
+  }
+
   // Actualizar pedido
-  const updateOrder = async (order: Order): Promise<boolean> => {
+  const updateOrder = async (order: Order, currentUser?: User): Promise<boolean> => {
     setLoading(true)
     setError(null)
 
@@ -314,6 +428,20 @@ export function useSupabase() {
           orders[orderIndex] = order
           localStorage.setItem("orders", JSON.stringify(orders))
         }
+
+        // Broadcast notification si hay cambio de estado
+        if (currentUser) {
+          const lastHistoryEntry = order.history[order.history.length - 1]
+          if (lastHistoryEntry && lastHistoryEntry.user === currentUser.name) {
+            broadcastNotification({
+              type: "success",
+              title: "Estado Actualizado",
+              message: `${currentUser.name} actualizó el pedido de ${order.clientName}`,
+              excludeUser: currentUser.name,
+            })
+          }
+        }
+
         return true
       }
 
@@ -330,6 +458,8 @@ export function useSupabase() {
           controlled_by: order.controlledBy,
           awaiting_payment_verification: order.awaitingPaymentVerification,
           initial_notes: order.initialNotes,
+          currently_working_by: order.currentlyWorkingBy,
+          working_start_time: order.workingStartTime?.toISOString(),
         })
         .eq("id", order.id)
 
@@ -340,7 +470,7 @@ export function useSupabase() {
 
       if (order.products.length > 0) {
         const productsToInsert = order.products.map((p) => ({
-          id: p.id,
+          id: p.id || generateUniqueId("PROD-"),
           order_id: order.id,
           code: p.code,
           name: p.name,
@@ -397,7 +527,7 @@ export function useSupabase() {
 
       if (newHistoryEntries.length > 0) {
         const historyToInsert = newHistoryEntries.map((h) => ({
-          id: h.id,
+          id: h.id || generateUniqueId("HIST-"),
           order_id: order.id,
           action: h.action,
           user_name: h.user,
@@ -408,6 +538,19 @@ export function useSupabase() {
         const { error: historyError } = await supabase.from("order_history").insert(historyToInsert)
 
         if (historyError) throw historyError
+      }
+
+      // Broadcast notification si hay cambio de estado
+      if (currentUser) {
+        const lastHistoryEntry = order.history[order.history.length - 1]
+        if (lastHistoryEntry && lastHistoryEntry.user === currentUser.name) {
+          broadcastNotification({
+            type: "success",
+            title: "Estado Actualizado",
+            message: `${currentUser.name} actualizó el pedido de ${order.clientName}`,
+            excludeUser: currentUser.name,
+          })
+        }
       }
 
       return true
@@ -475,5 +618,49 @@ export function useSupabase() {
     updateOrder,
     deleteOrder,
     fetchUsers,
+    setWorkingOnOrder,
+    clearWorkingOnOrder,
+  }
+}
+
+// Sistema de broadcasting de notificaciones
+interface BroadcastNotification {
+  type: "success" | "error" | "info" | "warning"
+  title: string
+  message: string
+  excludeUser?: string
+}
+
+const broadcastNotification = (notification: BroadcastNotification) => {
+  // Usar localStorage para simular broadcasting entre pestañas
+  const broadcastData = {
+    ...notification,
+    timestamp: Date.now(),
+    id: generateUniqueId("NOTIF-"),
+  }
+
+  localStorage.setItem("broadcast_notification", JSON.stringify(broadcastData))
+
+  // Limpiar después de un momento para evitar acumulación
+  setTimeout(() => {
+    localStorage.removeItem("broadcast_notification")
+  }, 1000)
+}
+
+// Hook para escuchar notificaciones broadcast
+export const useBroadcastNotifications = (currentUserName: string, onNotification: (notification: any) => void) => {
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (e) => {
+      if (e.key === "broadcast_notification" && e.newValue) {
+        try {
+          const notification = JSON.parse(e.newValue)
+          if (notification.excludeUser !== currentUserName) {
+            onNotification(notification)
+          }
+        } catch (error) {
+          console.error("Error parsing broadcast notification:", error)
+        }
+      }
+    })
   }
 }
