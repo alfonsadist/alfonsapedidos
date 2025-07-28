@@ -20,10 +20,20 @@ import {
   Loader2,
   User,
   Clock,
+  Trash2,
+  Wifi,
+  WifiOff,
 } from "lucide-react"
 import { OrderDialog } from "./components/order-dialog"
 import { OrderDetail } from "./components/order-detail"
-import { useSupabase, saveCurrentUser, getCurrentUser, useBroadcastNotifications } from "../hooks/use-supabase"
+import { CompletedOrderSummary } from "./components/completed-order-summary"
+import {
+  useSupabase,
+  saveCurrentUser,
+  getCurrentUser,
+  useBroadcastNotifications,
+  useRealtimeOrders,
+} from "../hooks/use-supabase"
 import { NotificationSystem, useNotifications } from "../components/notification-system"
 import Image from "next/image"
 
@@ -115,6 +125,7 @@ export default function OrderManagement() {
   const [searchTerm, setSearchTerm] = useState("")
   const [showOrderDialog, setShowOrderDialog] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [selectedCompletedOrder, setSelectedCompletedOrder] = useState<Order | null>(null)
   const [activeTab, setActiveTab] = useState("active")
   const [previousOrders, setPreviousOrders] = useState<Order[]>([])
 
@@ -128,12 +139,21 @@ export default function OrderManagement() {
     fetchUsers,
     setWorkingOnOrder,
     clearWorkingOnOrder,
+    isConnectedToSupabase,
   } = useSupabase()
+
   const { notifications, addNotification, removeNotification } = useNotifications()
 
   // Escuchar notificaciones broadcast
   useBroadcastNotifications(currentUser?.name || "", (notification) => {
     addNotification(notification.type, notification.title, notification.message)
+  })
+
+  // Configurar suscripciones en tiempo real de Supabase
+  useRealtimeOrders((payload) => {
+    console.log("🔄 Cambio detectado en tiempo real, refrescando datos...")
+    // Refrescar datos cuando hay cambios
+    fetchOrders().then(setOrders)
   })
 
   // Cargar datos iniciales
@@ -203,15 +223,17 @@ export default function OrderManagement() {
     setPreviousOrders(orders)
   }, [orders, currentUser])
 
-  // Refrescar datos cada 15 segundos para sincronización
+  // Refrescar datos automáticamente solo si no está conectado a Supabase (para localStorage)
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
-    }, 15000)
+    if (!isConnectedToSupabase) {
+      const interval = setInterval(async () => {
+        const ordersData = await fetchOrders()
+        setOrders(ordersData)
+      }, 15000)
 
-    return () => clearInterval(interval)
-  }, [])
+      return () => clearInterval(interval)
+    }
+  }, [isConnectedToSupabase])
 
   // Filtrar pedidos activos y completados
   const activeOrders = orders.filter((order) => order.status !== "pagado")
@@ -299,6 +321,11 @@ export default function OrderManagement() {
     setSelectedOrder(order)
   }
 
+  // Manejar cuando se hace clic en un pedido completado
+  const handleCompletedOrderSelect = (order: Order) => {
+    setSelectedCompletedOrder(order)
+  }
+
   // Verificar si un usuario puede trabajar en un pedido
   const canUserWorkOnOrder = (order: Order, user: UserRole) => {
     // Vale siempre puede trabajar en sus pedidos
@@ -370,7 +397,7 @@ export default function OrderManagement() {
     return null
   }
 
-  const renderOrderCard = (order: Order, showDeleteButton = true) => {
+  const renderOrderCard = (order: Order, showDeleteButton = true, isCompleted = false) => {
     if (!currentUser) return null
 
     const nextAction = getNextActionForUser(order, currentUser)
@@ -382,7 +409,7 @@ export default function OrderManagement() {
         className={`cursor-pointer hover:shadow-lg transition-shadow ${getOrderPriorityColor(order)} ${
           !canWork ? "opacity-75" : ""
         }`}
-        onClick={() => handleOrderSelect(order)}
+        onClick={() => (isCompleted ? handleCompletedOrderSelect(order) : handleOrderSelect(order))}
       >
         <CardHeader className="pb-3">
           <div className="flex justify-between items-start">
@@ -433,6 +460,16 @@ export default function OrderManagement() {
               </div>
             )}
 
+            {order.returnedProducts.length > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-blue-600 flex items-center gap-1">
+                  <Package className="w-3 h-3" />
+                  Devueltos:
+                </span>
+                <span className="font-medium text-blue-600">{order.returnedProducts.length}</span>
+              </div>
+            )}
+
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Creado:</span>
               <span className="font-medium">{order.createdAt.toLocaleDateString()}</span>
@@ -471,8 +508,8 @@ export default function OrderManagement() {
               </div>
             )}
 
-            {/* Botón de acción siguiente */}
-            {nextAction && canWork && (
+            {/* Botón de acción siguiente para pedidos activos */}
+            {!isCompleted && nextAction && canWork && (
               <div className="pt-2 border-t">
                 <Button
                   variant="outline"
@@ -489,14 +526,25 @@ export default function OrderManagement() {
                 </Button>
               </div>
             )}
+
+            {/* Mensaje para pedidos completados */}
+            {isCompleted && (
+              <div className="pt-2 border-t">
+                <div className="text-xs text-green-600 bg-green-50 p-2 rounded text-center">
+                  Haz clic para ver el resumen completo
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
+
+        {/* Botón de eliminar */}
         {currentUser.role === "vale" && showDeleteButton && (
           <div className="px-6 pb-4">
             <Button
               variant="destructive"
               size="sm"
-              className="w-full"
+              className="w-full flex items-center gap-2"
               onClick={(e) => {
                 e.stopPropagation()
                 if (
@@ -508,6 +556,7 @@ export default function OrderManagement() {
                 }
               }}
             >
+              <Trash2 className="w-4 h-4" />
               Eliminar Pedido
             </Button>
           </div>
@@ -546,9 +595,24 @@ export default function OrderManagement() {
                   <h1 className="text-3xl font-bold text-gray-900">Gestión de Pedidos</h1>
                   <p className="text-gray-600 mt-1">Control completo del proceso de pedidos</p>
                   {error && <p className="text-red-600 text-sm mt-1">Error: {error}</p>}
-                  <p className="text-sm text-blue-600 mt-1">
-                    👤 Sesión guardada en este dispositivo: <strong>{currentUser.name}</strong>
-                  </p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className="text-sm text-blue-600">
+                      👤 Sesión guardada en este dispositivo: <strong>{currentUser.name}</strong>
+                    </p>
+                    <div className="flex items-center gap-1">
+                      {isConnectedToSupabase ? (
+                        <>
+                          <Wifi className="w-4 h-4 text-green-600" />
+                          <span className="text-xs text-green-600">Supabase conectado</span>
+                        </>
+                      ) : (
+                        <>
+                          <WifiOff className="w-4 h-4 text-orange-600" />
+                          <span className="text-xs text-orange-600">Modo local</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -612,7 +676,7 @@ export default function OrderManagement() {
               <>
                 {/* Lista de pedidos activos */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {filteredActiveOrders.map((order) => renderOrderCard(order, true))}
+                  {filteredActiveOrders.map((order) => renderOrderCard(order, true, false))}
                 </div>
 
                 {filteredActiveOrders.length === 0 && (
@@ -643,7 +707,7 @@ export default function OrderManagement() {
               <>
                 {/* Lista de pedidos completados */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {filteredCompletedOrders.map((order) => renderOrderCard(order, false))}
+                  {filteredCompletedOrders.map((order) => renderOrderCard(order, true, true))}
                 </div>
 
                 {filteredCompletedOrders.length === 0 && (
@@ -685,6 +749,10 @@ export default function OrderManagement() {
           onSetWorking={(orderId) => setWorkingOnOrder(orderId, currentUser.name, currentUser.role)}
           onClearWorking={(orderId) => clearWorkingOnOrder(orderId, currentUser.name, currentUser.role)}
         />
+      )}
+
+      {selectedCompletedOrder && (
+        <CompletedOrderSummary order={selectedCompletedOrder} onClose={() => setSelectedCompletedOrder(null)} />
       )}
 
       {/* Sistema de Notificaciones */}

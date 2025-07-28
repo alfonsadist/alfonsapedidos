@@ -1,26 +1,16 @@
 "use client"
 
 import { createClient } from "@supabase/supabase-js"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import type { Order, User } from "../app/page"
 
 // Verificar que las variables de entorno existan
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-// Solo crear el cliente si las variables están configuradas correctamente
+// Crear el cliente de Supabase
 export const supabase =
   supabaseUrl && supabaseKey && supabaseUrl.startsWith("http") ? createClient(supabaseUrl, supabaseKey) : null
-
-// Si no hay Supabase configurado, mostrar advertencia
-// if (!supabase) {
-//   console.warn(
-//     "⚠️ Supabase no configurado. Usando datos locales.\n" +
-//       "Para usar la base de datos real, configura:\n" +
-//       "- NEXT_PUBLIC_SUPABASE_URL\n" +
-//       "- NEXT_PUBLIC_SUPABASE_ANON_KEY",
-//   )
-// }
 
 // Usuarios por defecto (fallback si no hay Supabase)
 const DEFAULT_USERS: User[] = [
@@ -69,8 +59,18 @@ export function useSupabase() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Si no hay Supabase, usar localStorage como fallback
+  // Priorizar Supabase sobre localStorage
+  const useSupabaseDB = !!supabase
   const useLocalStorage = !supabase
+
+  // Log del estado de conexión
+  useEffect(() => {
+    if (useSupabaseDB) {
+      console.log("✅ Conectado a Supabase - Datos en tiempo real activados")
+    } else {
+      console.log("⚠️ Usando localStorage - Configura Supabase para datos en tiempo real")
+    }
+  }, [useSupabaseDB])
 
   // Obtener todos los pedidos
   const fetchOrders = async (): Promise<Order[]> => {
@@ -96,7 +96,8 @@ export function useSupabase() {
         return []
       }
 
-      // Código de Supabase (cuando esté configurado)
+      // Código de Supabase
+      console.log("🔄 Obteniendo pedidos desde Supabase...")
       const { data: ordersData, error: ordersError } = await supabase!
         .from("orders")
         .select("*")
@@ -187,9 +188,10 @@ export function useSupabase() {
         orders.push(order)
       }
 
+      console.log(`✅ ${orders.length} pedidos obtenidos desde Supabase`)
       return orders
     } catch (err) {
-      console.error("Error fetching orders:", err)
+      console.error("❌ Error fetching orders:", err)
       setError(err instanceof Error ? err.message : "Error desconocido")
       return []
     } finally {
@@ -218,7 +220,7 @@ export function useSupabase() {
 
     try {
       const orderId = generateUniqueId("PED-")
-      console.log("Creando pedido con ID:", orderId)
+      console.log("🚀 Creando pedido con ID:", orderId)
 
       if (useLocalStorage) {
         // Usar localStorage como fallback
@@ -263,8 +265,8 @@ export function useSupabase() {
         return true
       }
 
-      // Código de Supabase (cuando esté configurado)
-      console.log("Insertando orden en Supabase...")
+      // Código de Supabase
+      console.log("📝 Insertando orden en Supabase...")
 
       // Insertar orden
       const { error: orderError } = await supabase!.from("orders").insert({
@@ -277,11 +279,11 @@ export function useSupabase() {
       })
 
       if (orderError) {
-        console.error("Error al insertar orden:", orderError)
+        console.error("❌ Error al insertar orden:", orderError)
         throw orderError
       }
 
-      console.log("Orden creada, insertando productos...")
+      console.log("✅ Orden creada, insertando productos...")
 
       // Insertar productos con IDs únicos
       const productsToInsert = orderData.products.map((product) => ({
@@ -294,16 +296,16 @@ export function useSupabase() {
         is_checked: false,
       }))
 
-      console.log("Productos a insertar:", productsToInsert)
+      console.log("📦 Productos a insertar:", productsToInsert.length)
 
       const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
 
       if (productsError) {
-        console.error("Error al insertar productos:", productsError)
+        console.error("❌ Error al insertar productos:", productsError)
         throw productsError
       }
 
-      console.log("Productos insertados, creando historial...")
+      console.log("✅ Productos insertados, creando historial...")
 
       // Insertar historial
       const historyId = generateUniqueId("HIST-")
@@ -316,7 +318,7 @@ export function useSupabase() {
       })
 
       if (historyError) {
-        console.error("Error al insertar historial:", historyError)
+        console.error("❌ Error al insertar historial:", historyError)
         throw historyError
       }
 
@@ -328,10 +330,10 @@ export function useSupabase() {
         excludeUser: currentUser.name,
       })
 
-      console.log("Pedido creado exitosamente:", orderId)
+      console.log("🎉 Pedido creado exitosamente:", orderId)
       return true
     } catch (err) {
-      console.error("Error completo al crear pedido:", err)
+      console.error("❌ Error completo al crear pedido:", err)
       setError(err instanceof Error ? err.message : "Error al crear pedido")
       return false
     } finally {
@@ -358,6 +360,7 @@ export function useSupabase() {
         return true
       }
 
+      console.log(`👷 ${userName} empezó a trabajar en pedido ${orderId}`)
       const { error } = await supabase!
         .from("orders")
         .update({
@@ -367,9 +370,10 @@ export function useSupabase() {
         .eq("id", orderId)
 
       if (error) throw error
+      console.log("✅ Estado de trabajo actualizado en Supabase")
       return true
     } catch (err) {
-      console.error("Error setting working status:", err)
+      console.error("❌ Error setting working status:", err)
       return false
     }
   }
@@ -396,6 +400,7 @@ export function useSupabase() {
         return true
       }
 
+      console.log(`🏁 ${userName || "Usuario"} terminó de trabajar en pedido ${orderId}`)
       const { error } = await supabase!
         .from("orders")
         .update({
@@ -405,9 +410,10 @@ export function useSupabase() {
         .eq("id", orderId)
 
       if (error) throw error
+      console.log("✅ Estado de trabajo limpiado en Supabase")
       return true
     } catch (err) {
-      console.error("Error clearing working status:", err)
+      console.error("❌ Error clearing working status:", err)
       return false
     }
   }
@@ -445,7 +451,9 @@ export function useSupabase() {
         return true
       }
 
-      // Código de Supabase (cuando esté configurado)
+      // Código de Supabase
+      console.log(`🔄 Actualizando pedido ${order.id} en Supabase...`)
+
       const { error: orderError } = await supabase!
         .from("orders")
         .update({
@@ -466,7 +474,7 @@ export function useSupabase() {
       if (orderError) throw orderError
 
       // Eliminar productos existentes y reinsertar
-      await supabase.from("products").delete().eq("order_id", order.id)
+      await supabase!.from("products").delete().eq("order_id", order.id)
 
       if (order.products.length > 0) {
         const productsToInsert = order.products.map((p) => ({
@@ -479,13 +487,13 @@ export function useSupabase() {
           is_checked: p.isChecked,
         }))
 
-        const { error: productsError } = await supabase.from("products").insert(productsToInsert)
+        const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
 
         if (productsError) throw productsError
       }
 
       // Eliminar y reinsertar productos faltantes
-      await supabase.from("missing_products").delete().eq("order_id", order.id)
+      await supabase!.from("missing_products").delete().eq("order_id", order.id)
 
       if (order.missingProducts.length > 0) {
         const missingToInsert = order.missingProducts.map((m) => ({
@@ -496,13 +504,13 @@ export function useSupabase() {
           quantity: m.quantity,
         }))
 
-        const { error: missingError } = await supabase.from("missing_products").insert(missingToInsert)
+        const { error: missingError } = await supabase!.from("missing_products").insert(missingToInsert)
 
         if (missingError) throw missingError
       }
 
       // Eliminar y reinsertar productos devueltos
-      await supabase.from("returned_products").delete().eq("order_id", order.id)
+      await supabase!.from("returned_products").delete().eq("order_id", order.id)
 
       if (order.returnedProducts.length > 0) {
         const returnedToInsert = order.returnedProducts.map((r) => ({
@@ -514,13 +522,13 @@ export function useSupabase() {
           reason: r.reason,
         }))
 
-        const { error: returnedError } = await supabase.from("returned_products").insert(returnedToInsert)
+        const { error: returnedError } = await supabase!.from("returned_products").insert(returnedToInsert)
 
         if (returnedError) throw returnedError
       }
 
       // Insertar nuevas entradas de historial (solo las que no existen)
-      const { data: existingHistory } = await supabase.from("order_history").select("id").eq("order_id", order.id)
+      const { data: existingHistory } = await supabase!.from("order_history").select("id").eq("order_id", order.id)
 
       const existingIds = new Set(existingHistory?.map((h) => h.id) || [])
       const newHistoryEntries = order.history.filter((h) => !existingIds.has(h.id))
@@ -535,7 +543,7 @@ export function useSupabase() {
           created_at: h.timestamp.toISOString(),
         }))
 
-        const { error: historyError } = await supabase.from("order_history").insert(historyToInsert)
+        const { error: historyError } = await supabase!.from("order_history").insert(historyToInsert)
 
         if (historyError) throw historyError
       }
@@ -553,8 +561,10 @@ export function useSupabase() {
         }
       }
 
+      console.log("✅ Pedido actualizado exitosamente en Supabase")
       return true
     } catch (err) {
+      console.error("❌ Error al actualizar pedido:", err)
       setError(err instanceof Error ? err.message : "Error al actualizar pedido")
       return false
     } finally {
@@ -578,10 +588,13 @@ export function useSupabase() {
       }
 
       // Código de Supabase
+      console.log(`🗑️ Eliminando pedido ${orderId} de Supabase...`)
       const { error } = await supabase!.from("orders").delete().eq("id", orderId)
       if (error) throw error
+      console.log("✅ Pedido eliminado exitosamente de Supabase")
       return true
     } catch (err) {
+      console.error("❌ Error al eliminar pedido:", err)
       setError(err instanceof Error ? err.message : "Error al eliminar pedido")
       return false
     } finally {
@@ -596,18 +609,28 @@ export function useSupabase() {
       return DEFAULT_USERS
     }
 
-    const { data, error } = await supabase!.from("users").select("*").order("name")
+    try {
+      console.log("👥 Obteniendo usuarios desde Supabase...")
+      const { data, error } = await supabase!.from("users").select("*").order("name")
 
-    if (error) {
-      setError(error.message)
+      if (error) {
+        console.error("❌ Error al obtener usuarios:", error)
+        setError(error.message)
+        return DEFAULT_USERS
+      }
+
+      const users = data.map((u) => ({
+        id: u.id,
+        name: u.name,
+        role: u.role,
+      }))
+
+      console.log(`✅ ${users.length} usuarios obtenidos desde Supabase`)
+      return users
+    } catch (err) {
+      console.error("❌ Error fetching users:", err)
       return DEFAULT_USERS
     }
-
-    return data.map((u) => ({
-      id: u.id,
-      name: u.name,
-      role: u.role,
-    }))
   }
 
   return {
@@ -620,6 +643,7 @@ export function useSupabase() {
     fetchUsers,
     setWorkingOnOrder,
     clearWorkingOnOrder,
+    isConnectedToSupabase: useSupabaseDB,
   }
 }
 
@@ -663,4 +687,35 @@ export const useBroadcastNotifications = (currentUserName: string, onNotificatio
       }
     })
   }
+}
+
+// Hook para suscripciones en tiempo real de Supabase
+export const useRealtimeOrders = (onOrderChange: (payload: any) => void) => {
+  useEffect(() => {
+    if (!supabase) return
+
+    console.log("🔴 Configurando suscripciones en tiempo real...")
+
+    // Suscribirse a cambios en la tabla orders
+    const ordersSubscription = supabase
+      .channel("orders-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, (payload) => {
+        console.log("📡 Cambio en orders:", payload)
+        onOrderChange(payload)
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, (payload) => {
+        console.log("📡 Cambio en products:", payload)
+        onOrderChange(payload)
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "order_history" }, (payload) => {
+        console.log("📡 Cambio en order_history:", payload)
+        onOrderChange(payload)
+      })
+      .subscribe()
+
+    return () => {
+      console.log("🔴 Desconectando suscripciones en tiempo real...")
+      supabase.removeChannel(ordersSubscription)
+    }
+  }, [onOrderChange])
 }
