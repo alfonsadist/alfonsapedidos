@@ -104,7 +104,7 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
 
     // Parsear cajas con formato "número (xnúmero)" - REGEX CORRECTO
     if (cajasText && cajasText.trim()) {
-      const boxMatch = cajasText.match(/(\d+)\s*$$\s*[xX]\s*(\d+)\s*$$/i)
+      const boxMatch = cajasText.match(/(\d+)\s*\(x\s*(\d+)\s*\)/i)
       if (boxMatch) {
         const boxes = Number.parseInt(boxMatch[1])
         const unitsPerBox = Number.parseInt(boxMatch[2])
