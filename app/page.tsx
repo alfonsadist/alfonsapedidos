@@ -23,6 +23,7 @@ import {
   Trash2,
   Wifi,
   WifiOff,
+  RefreshCw,
 } from "lucide-react"
 import { OrderDialog } from "./components/order-dialog"
 import { OrderDetail } from "./components/order-detail"
@@ -128,6 +129,7 @@ export default function OrderManagement() {
   const [selectedCompletedOrder, setSelectedCompletedOrder] = useState<Order | null>(null)
   const [activeTab, setActiveTab] = useState("active")
   const [previousOrders, setPreviousOrders] = useState<Order[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const {
     loading,
@@ -144,6 +146,19 @@ export default function OrderManagement() {
 
   const { notifications, addNotification, removeNotification } = useNotifications()
 
+// Función para actualizar datos manualmente
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    try {
+      const ordersData = await fetchOrders()
+      setOrders(ordersData)
+      addNotification("success", "Actualizado", "Datos actualizados correctamente")
+    } catch (error) {
+      addNotification("error", "Error", "No se pudieron actualizar los datos")
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
   // Escuchar notificaciones broadcast
   useBroadcastNotifications(currentUser?.name || "", (notification) => {
     addNotification(notification.type, notification.title, notification.message)
@@ -618,6 +633,15 @@ export default function OrderManagement() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            <Button
+                onClick={handleRefresh}
+                disabled={isRefreshing || loading}
+                variant="outline"
+                className="flex items-center gap-2 bg-transparent"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+                {isRefreshing ? "Actualizando..." : "Actualizar"}
+              </Button>
               <select
                 value={currentUser.id}
                 onChange={(e) => handleUserChange(e.target.value)}
