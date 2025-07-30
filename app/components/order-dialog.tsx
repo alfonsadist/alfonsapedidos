@@ -1,13 +1,13 @@
 "use client"
 
 import type React from "react"
-import { useState, useRef } from "react"
+import { useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Upload, FileText, Plus, Trash2, AlertCircle } from "lucide-react"
+import { FileText, Plus, Trash2, AlertCircle } from "lucide-react"
 import type { Order, Product } from "../page"
 
 interface OrderDialogProps {
@@ -36,19 +36,18 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
     { id: "1", name: "", quantity: 1, originalQuantity: 1, isChecked: false },
   ])
   const [initialNotes, setInitialNotes] = useState("")
-  const [isProcessingPDF, setIsProcessingPDF] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const [pdfError, setPdfError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [textInput, setTextInput] = useState("")
+  const [isProcessingText, setIsProcessingText] = useState(false)
+  const [textError, setTextError] = useState<string | null>(null)
 
   const resetForm = () => {
     setClientName("")
     setClientAddress("")
     setProducts([{ id: "1", name: "", quantity: 1, originalQuantity: 1, isChecked: false }])
     setInitialNotes("")
-    setIsProcessingPDF(false)
-    setDragActive(false)
-    setPdfError(null)
+    setTextInput("")
+    setIsProcessingText(false)
+    setTextError(null)
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -96,169 +95,130 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
     setProducts(products.map((p) => (p.id === id ? { ...p, [field]: value } : p)))
   }
 
-  // Función para parsear formato de cajas como "2 (x6)" = 2 cajas de 6 unidades cada una
-  const parseBoxFormat = (cajasText: string, unidText: string): number => {
-    console.log(`Procesando: Cajas="${cajasText}", Unid="${unidText}"`)
+  // Función corregida para parsear una línea de texto del formato especificado
+const parseProductLine = (line: string): Product | null => {
+  // 1) Limpia precios y guiones finales
+  const cleanLine = line
+    .split("$")[0]
+    .trim()
+    .replace(/\s*-\s*$/, "")
 
-    let totalQuantity = 0
+  // 2) Patrón para cajas + unidades sueltas
+  const comboPattern = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(\d+)\s+(.+)$/i
+  let match = cleanLine.match(comboPattern)
+  if (match) {
+    const [_, cajas, porCaja, extra, codigo, articulo] = match
+    const total = Number(cajas) * Number(porCaja) + Number(extra)
+    return {
+      // ahora
+id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 
-    // Parsear cajas con formato "número (xnúmero)" - REGEX CORRECTO
-    if (cajasText && cajasText.trim()) {
-      const boxMatch = cajasText.match(/(\d+)\s*\(x\s*(\d+)\s*\)/i)
-      if (boxMatch) {
-        const boxes = Number.parseInt(boxMatch[1])
-        const unitsPerBox = Number.parseInt(boxMatch[2])
-        const boxTotal = boxes * unitsPerBox
-        totalQuantity += boxTotal
-        console.log(`✅ Regex match: '${cajasText}' → ${boxes} cajas × ${unitsPerBox} unidades = ${boxTotal}`)
-      } else {
-        console.log(`❌ No match para: "${cajasText}"`)
-      }
+      code: codigo,
+      name: articulo.trim(),
+      quantity: total,
+      originalQuantity: total,
+      isChecked: false,
     }
-
-    // Parsear unidades sueltas
-    if (unidText && unidText.trim()) {
-      const units = Number.parseInt(unidText) || 0
-      totalQuantity += units
-      console.log(`✅ Unidades sueltas: ${units}`)
-    }
-
-    console.log(`🔢 Cantidad total calculada: ${totalQuantity}`)
-    return totalQuantity
   }
 
-  // Función simplificada para procesar texto del PDF
+  // 3) Patrón para solo cajas
+  const cajasPattern = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(.+)$/i
+  match = cleanLine.match(cajasPattern)
+  if (match) {
+    const [_, cajas, porCaja, codigo, articulo] = match
+    const total = Number(cajas) * Number(porCaja)
+    return {
+      // ahora
+id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+
+      code: codigo,
+      name: articulo.trim(),
+      quantity: total,
+      originalQuantity: total,
+      isChecked: false,
+    }
+  }
+
+  // 4) Patrón para solo unidades
+  const simplePattern = /^(\d+)\s+(\d+)\s+(.+)$/i
+  match = cleanLine.match(simplePattern)
+  if (match) {
+    const [_, qty, codigo, articulo] = match
+    const total = Number(qty)
+    return {
+      // ahora
+id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+
+      code: codigo,
+      name: articulo.trim(),
+      quantity: total,
+      originalQuantity: total,
+      isChecked: false,
+    }
+  }
+
+  // 5) Si nada casó...
+  console.warn("No se pudo parsear:", line)
+  return null
+}
+
+  // Función para procesar el texto pegado
   const processTextContent = (text: string) => {
     console.log("🔍 Procesando contenido del texto...")
-
-    // Buscar información del cliente
-    const clientMatch = text.match(/las heras/i)
-    if (clientMatch) {
-      setClientName("las heras")
-      console.log("👤 Cliente detectado: las heras")
-    }
-
-    // Buscar dirección
-    const addressMatch = text.match(/SAN LUIS - VILLA MERCEDES/i)
-    if (addressMatch) {
-      setClientAddress("SAN LUIS - VILLA MERCEDES")
-      console.log("📍 Dirección detectada: SAN LUIS - VILLA MERCEDES")
-    }
-
-    // Datos de productos conocidos del PDF
-    const productData = [
-      { cajas: "", unid: "6", codigo: "559", articulo: "EL ESTECO CAB SUAV 750CC" },
-      { cajas: "1 (x6)", unid: "", codigo: "8242", articulo: "GIN DALMATA CITRUS 750CC" },
-      { cajas: "1 (x6)", unid: "", codigo: "253", articulo: "HESPERIDINA" },
-      { cajas: "2 (x6)", unid: "", codigo: "605", articulo: "KAIKEN ULTRA MALBEC 750CC" },
-      { cajas: "10 (x6)", unid: "", codigo: "6370", articulo: "MONSTER ROJO WATERMEL" },
-      { cajas: "1 (x6)", unid: "", codigo: "4621", articulo: "NINA GRAN MALBEC 750CC" },
-      { cajas: "1 (x6)", unid: "", codigo: "22348", articulo: "PERRO CALLEJERO PINOT 750CC" },
-      { cajas: "3 (x6)", unid: "", codigo: "153", articulo: "SALENTEIN BRUT NATURE 750CC" },
-      { cajas: "1 (x6)", unid: "", codigo: "782", articulo: "SAPO DE OTRO POZO BLEND DE TINTAS" },
-      { cajas: "1 (x6)", unid: "", codigo: "4342", articulo: "SENSEI MALBEC 750CC" },
-      { cajas: "1 (x6)", unid: "", codigo: "1693", articulo: "TEQUILA CAMACHO 1L" },
-      { cajas: "1 (x6)", unid: "", codigo: "6353", articulo: "TEQUILA SOL AZTECA 1L" },
-      { cajas: "3 (x6)", unid: "", codigo: "318", articulo: "TRES PLUMAS DULCE DE LECHE" },
-    ]
-
-    const extractedProducts: Product[] = []
-
-    console.log(`📦 Procesando ${productData.length} productos...`)
-
-    // Procesar cada producto
-    productData.forEach((item, index) => {
-      console.log(`\n--- Producto ${index + 1} ---`)
-      console.log(
-        `Datos: Cajas="${item.cajas}", Unid="${item.unid}", Código="${item.codigo}", Artículo="${item.articulo}"`,
-      )
-
-      const quantity = parseBoxFormat(item.cajas, item.unid)
-
-      if (quantity > 0) {
-        const product: Product = {
-          id: `extracted-${Date.now()}-${index}`,
-          code: item.codigo,
-          name: item.articulo,
-          quantity: quantity,
-          originalQuantity: quantity,
-          isChecked: false,
-        }
-
-        extractedProducts.push(product)
-        console.log(`✅ Producto agregado: ${product.name} - Cantidad: ${product.quantity}`)
-      } else {
-        console.log(`❌ Producto omitido por cantidad 0: ${item.articulo}`)
-      }
-    })
-
-    console.log(`\n🎉 Resumen: ${extractedProducts.length} productos extraídos de ${productData.length} totales`)
-
-    if (extractedProducts.length > 0) {
-      setProducts(extractedProducts)
-      setPdfError(null)
-      console.log("✅ Productos cargados en el estado")
-    } else {
-      setPdfError("No se pudieron extraer productos del PDF.")
-      console.log("❌ No se cargaron productos")
-    }
-  }
-
-  const processPDF = async (file: File) => {
-    setIsProcessingPDF(true)
-    setPdfError(null)
-    console.log("🚀 Iniciando análisis del archivo:", file.name)
+    setIsProcessingText(true)
+    setTextError(null)
 
     try {
-      // Intentar leer como texto plano primero
-      const text = await file.text()
-      console.log("📄 Contenido del archivo:", text.substring(0, 200))
+      const lines = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .filter((line) => !line.includes("Cajas Unid Codigo Articulo")) // Filtrar encabezado
 
-      // Si contiene las palabras clave del PDF, procesarlo
-      if (text.includes("las heras") || text.includes("alfonsadistribuidora")) {
-        processTextContent(text)
+      console.log(`📄 Procesando ${lines.length} líneas...`)
+
+      const extractedProducts: Product[] = []
+
+      for (const line of lines) {
+        const product = parseProductLine(line)
+        if (product) {
+          extractedProducts.push(product)
+          console.log(`✅ Producto agregado: ${product.name} - Código: ${product.code} - Cantidad: ${product.quantity}`)
+        }
+      }
+
+      console.log(`🎉 Resumen: ${extractedProducts.length} productos extraídos`)
+
+      if (extractedProducts.length > 0) {
+        setProducts(extractedProducts)
+        setTextError(null)
+        console.log("✅ Productos cargados en el estado")
       } else {
-        // Si no es texto plano, usar una implementación más simple
-        console.log("📝 Archivo no es texto plano, usando datos predefinidos...")
-        processTextContent("las heras SAN LUIS - VILLA MERCEDES alfonsadistribuidora")
+        setTextError("No se pudieron extraer productos del texto. Verifica que el formato sea correcto.")
+        console.log("❌ No se cargaron productos")
       }
     } catch (error) {
-      console.error("❌ Error procesando archivo:", error)
-
-      // Como fallback, cargar los productos conocidos del PDF
-      console.log("🔄 Usando datos predefinidos del PDF...")
-      processTextContent("las heras SAN LUIS - VILLA MERCEDES alfonsadistribuidora")
+      console.error("❌ Error procesando texto:", error)
+      setTextError(`Error al procesar el texto: ${error instanceof Error ? error.message : "Error desconocido"}`)
     } finally {
-      setIsProcessingPDF(false)
+      setIsProcessingText(false)
     }
   }
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      processPDF(file)
+  const handleProcessText = () => {
+    if (!textInput.trim()) {
+      setTextError("Por favor ingresa el texto con los productos")
+      return
     }
+
+    // Reset productos antes de procesar
+    setProducts([{ id: "1", name: "", quantity: 1, originalQuantity: 1, isChecked: false }])
+    processTextContent(textInput)
   }
 
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true)
-    } else if (e.type === "dragleave") {
-      setDragActive(false)
-    }
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0]
-      processPDF(file)
-    }
+  const clearText = () => {
+    setTextInput("")
+    setTextError(null)
   }
 
   return (
@@ -313,71 +273,52 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
             />
           </div>
 
-          {/* Cargar Productos desde Archivo */}
+          {/* Cargar Productos desde Texto */}
           <div>
-            <h3 className="text-lg font-semibold mb-4">Cargar Productos desde Archivo</h3>
-            <div
-              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                dragActive ? "border-blue-500 bg-blue-50" : "border-gray-300"
-              } ${isProcessingPDF ? "opacity-50" : ""}`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.txt"
-                onChange={handleFileUpload}
-                className="hidden"
-                disabled={isProcessingPDF}
-              />
+            <h3 className="text-lg font-semibold mb-4">Cargar Productos desde Texto</h3>
 
-              <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="textInput">Pega aquí el texto copiado del PDF</Label>
+                <Textarea
+                  id="textInput"
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="Pega aquí el texto del PDF..."
+                  rows={10}
+                  className="font-mono text-sm"
+                />
+              </div>
 
-              <h4 className="text-lg font-medium mb-2">
-                {isProcessingPDF ? "Procesando PDF..." : "Arrastra tu PDF o imagen aquí"}
-              </h4>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  onClick={handleProcessText}
+                  disabled={isProcessingText || !textInput.trim()}
+                  className="flex items-center gap-2"
+                >
+                  <FileText className="w-4 h-4" />
+                  {isProcessingText ? "Procesando..." : "Procesar Texto"}
+                </Button>
 
-              <p className="text-sm text-gray-600 mb-4">
-                Se detectarán automáticamente: <strong>Código, Producto y Cantidad</strong>
-              </p>
-
-              <p className="text-xs text-gray-500 mb-4">Formatos soportados: PDF, TXT</p>
-
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isProcessingPDF}
-                className="flex items-center gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                {isProcessingPDF ? "Procesando..." : "Seleccionar Archivo"}
-              </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={clearText}
+                  className="flex items-center gap-2 bg-transparent"
+                >
+                  Limpiar Texto
+                </Button>
+              </div>
             </div>
 
-            {/* Error del PDF */}
-            {pdfError && (
+            {/* Error del texto */}
+            {textError && (
               <div className="mt-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 p-3 rounded">
                 <AlertCircle className="w-4 h-4" />
-                <span>{pdfError}</span>
+                <span>{textError}</span>
               </div>
             )}
-
-            {/* Botón de prueba para cargar datos del PDF */}
-            <div className="mt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => processTextContent("las heras SAN LUIS - VILLA MERCEDES alfonsadistribuidora")}
-                className="flex items-center gap-2"
-              >
-                <FileText className="w-4 h-4" />
-                Cargar Datos del PDF de Prueba
-              </Button>
-            </div>
           </div>
 
           {/* Productos */}
@@ -399,7 +340,7 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
             {/* Encabezados de tabla */}
             <div className="grid grid-cols-12 gap-2 mb-2 text-sm font-medium text-gray-600 px-2">
               <div className="col-span-2">Código</div>
-              <div className="col-span-7">Producto 1</div>
+              <div className="col-span-7">Producto</div>
               <div className="col-span-2">Cantidad Total</div>
               <div className="col-span-1"></div>
             </div>
@@ -459,7 +400,7 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={isProcessingPDF}>
+            <Button type="submit" disabled={isProcessingText}>
               Crear Presupuesto
             </Button>
           </div>
