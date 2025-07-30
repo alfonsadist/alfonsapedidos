@@ -48,7 +48,6 @@
     "lucide-react": "^0.454.0",
     "next": "15.2.4",
     "next-themes": "latest",
-    "pdfjs-dist": "^5.4.54",
     "react": "^19",
     "react-day-picker": "latest",
     "react-dom": "^19",
