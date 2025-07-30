@@ -10,6 +10,12 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+   @media (max-width: 767px) {
+    .font-medium-responsive {
+      font-size: 0.7rem;
+    }
+  }
+ 
 }
 
 @layer base {

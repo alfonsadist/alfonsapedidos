@@ -1142,7 +1142,7 @@ export function OrderDetail({
                                     {product.code}
                                   </Badge>
                                 )}
-                                <span className="font-medium">{product.name}</span>
+                                <span className="font-medium font-medium-responsive">{product.name}</span>
                               </div>
                             )}
                           </div>
