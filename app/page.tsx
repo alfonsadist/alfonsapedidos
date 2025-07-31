@@ -62,6 +62,8 @@ export type Product = {
   quantity: number
   originalQuantity?: number // Para tracking de faltantes
   isChecked?: boolean // Para marcar como "bien"
+  unitPrice?: number // Precio unitario (solo para Vale)
+  subtotal?: number // Subtotal (solo para Vale)
 }
 
 export type MissingProduct = {
@@ -105,6 +107,7 @@ export type Order = {
   initialNotes?: string // Observaciones iniciales de Vale
   currentlyWorkingBy?: string // Quien está trabajando actualmente en el pedido
   workingStartTime?: Date // Cuándo empezó a trabajar
+  totalAmount?: number // Total del presupuesto (solo para Vale)
 }
 
 // Estados y sus colores
@@ -130,7 +133,6 @@ export default function OrderManagement() {
   const [activeTab, setActiveTab] = useState("active")
   const [previousOrders, setPreviousOrders] = useState<Order[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
-
   const {
     loading,
     error,
@@ -146,8 +148,7 @@ export default function OrderManagement() {
 
   const { notifications, addNotification, removeNotification } = useNotifications()
 
-// Función para actualizar datos manualmente
-  const handleRefresh = async () => {
+const handleRefresh = async () => {
     setIsRefreshing(true)
     try {
       const ordersData = await fetchOrders()
@@ -412,6 +413,15 @@ export default function OrderManagement() {
     return null
   }
 
+  // Formatear precio en pesos argentinos
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: "ARS",
+      minimumFractionDigits: 2,
+    }).format(price)
+  }
+
   const renderOrderCard = (order: Order, showDeleteButton = true, isCompleted = false) => {
     if (!currentUser) return null
 
@@ -465,6 +475,14 @@ export default function OrderManagement() {
               <span className="font-medium">{order.products.length}</span>
             </div>
 
+            {/* Mostrar total solo para Vale */}
+            {currentUser.role === "vale" && order.totalAmount && (
+              <div className="flex justify-between text-sm">
+                <span className="text-green-600 font-medium">Total:</span>
+                <span className="font-bold text-green-600">{formatPrice(order.totalAmount)}</span>
+              </div>
+            )}
+
             {order.missingProducts.length > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-red-600 flex items-center gap-1">
@@ -481,7 +499,7 @@ export default function OrderManagement() {
                   <Package className="w-3 h-3" />
                   Devueltos:
                 </span>
-                <span className="font-medium text-blue-600">{order.returnedProducts.length}</span>
+                <span className="font-medium  text-blue-600">{order.returnedProducts.length}</span>
               </div>
             )}
 
@@ -633,7 +651,7 @@ export default function OrderManagement() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-            <Button
+              <Button
                 onClick={handleRefresh}
                 disabled={isRefreshing || loading}
                 variant="outline"

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { FileText, Plus, Trash2, AlertCircle } from "lucide-react"
+import { FileText, Plus, Trash2, AlertCircle, DollarSign } from "lucide-react"
 import type { Order, Product } from "../page"
 
 interface OrderDialogProps {
@@ -59,6 +59,8 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
       return
     }
 
+    const totalAmount = validProducts.reduce((sum, product) => sum + (product.subtotal || 0), 0)
+
     onCreateOrder({
       clientName: clientName.trim(),
       clientAddress: clientAddress.trim(),
@@ -69,6 +71,7 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
       })),
       paymentMethod: undefined,
       initialNotes: initialNotes.trim() || undefined,
+      totalAmount: totalAmount > 0 ? totalAmount : undefined,
     })
 
     resetForm()
@@ -95,87 +98,116 @@ export function OrderDialog({ open, onOpenChange, onCreateOrder }: OrderDialogPr
     setProducts(products.map((p) => (p.id === id ? { ...p, [field]: value } : p)))
   }
 
-  // Función corregida para parsear una línea de texto del formato especificado
-const parseProductLine = (line: string): Product | null => {
-  // 1) Limpia precios y guiones finales
-  const cleanLine = line
-    .split("$")[0]
-    .trim()
-    .replace(/\s*-\s*$/, "")
-
-  // 2) Patrón para cajas + unidades sueltas
-  const comboPattern = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(\d+)\s+(.+)$/i
-  let match = cleanLine.match(comboPattern)
-  if (match) {
-    const [_, cajas, porCaja, extra, codigo, articulo] = match
-    const total = Number(cajas) * Number(porCaja) + Number(extra)
-    return {
-      // ahora
-id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-
-      code: codigo,
-      name: articulo.trim(),
-      quantity: total,
-      originalQuantity: total,
-      isChecked: false,
+  // parseo de precios en formato argentino (16.008,00 => 16008.00)
+  const parsePrice = (priceStr: string): number => {
+    let cleanPrice = priceStr.replace(/[$\s]/g, "")
+    // Reemplaza coma decimal (última coma) por punto
+    const lastComma = cleanPrice.lastIndexOf(",")
+    if (lastComma !== -1) {
+      cleanPrice = cleanPrice.substring(0, lastComma) + "." + cleanPrice.substring(lastComma + 1)
     }
+    // Quitar puntos miles (todos los puntos excepto el último si existiera)
+    const parts = cleanPrice.split(".")
+    if (parts.length > 2) {
+      const integerPart = parts.slice(0, -1).join("")
+      const decimalPart = parts[parts.length - 1]
+      cleanPrice = integerPart + "." + decimalPart
+    }
+    return Number.parseFloat(cleanPrice) || 0
   }
 
-  // 3) Patrón para solo cajas
-  const cajasPattern = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(.+)$/i
-  match = cleanLine.match(cajasPattern)
-  if (match) {
-    const [_, cajas, porCaja, codigo, articulo] = match
-    const total = Number(cajas) * Number(porCaja)
-    return {
-      // ahora
-id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  const parseProductLine = (line: string): Product | null => {
+    // Separar precios
+    const priceParts = line.split("$").map((p) => p.trim()).filter((p) => p !== "")
+    let unitPrice: number | undefined = undefined
+    let subtotal: number | undefined = undefined
 
-      code: codigo,
-      name: articulo.trim(),
-      quantity: total,
-      originalQuantity: total,
-      isChecked: false,
+    if (priceParts.length >= 2) {
+      // primer precio después del $ es unitario, el siguiente es subtotal
+      unitPrice = parsePrice(priceParts[1])
+      if (priceParts.length >= 3) {
+        subtotal = parsePrice(priceParts[2])
+      }
     }
+
+    // Parte antes del primer $
+    const beforePrice = line.split("$")[0].trim()
+    // Remover encabezados si vinieran
+    const cleanLine = beforePrice.replace(/Cajas\s+Unid\s+Codigo\s+Articulo/i, "").trim()
+
+    // 1) Combo con extra: "1 (x12) 11 376 RON HAVANA 3 AÑOS 750CC"
+    const comboWithExtra = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(\d+)\s+(.+)$/i
+    let match = cleanLine.match(comboWithExtra)
+    if (match) {
+      const [_, cajasStr, porCajaStr, extraStr, codigo, articulo] = match
+      const cajas = Number(cajasStr)
+      const porCaja = Number(porCajaStr)
+      const extra = Number(extraStr)
+      const totalQty = cajas * porCaja + extra
+      return {
+        id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        code: codigo,
+        name: articulo.trim(),
+        quantity: totalQty,
+        originalQuantity: totalQty,
+        isChecked: false,
+        unitPrice: unitPrice && unitPrice > 0 ? unitPrice : undefined,
+        subtotal: subtotal && subtotal > 0 ? subtotal : undefined,
+      }
+    }
+
+    // 2) Solo cajas: "50 (x9) 7667 AGUA CELLIER SIN GAS 600CC"
+    const onlyCajas = /^(\d+)\s*\(x(\d+)\)\s+(\d+)\s+(.+)$/i
+    match = cleanLine.match(onlyCajas)
+    if (match) {
+      const [_, cajasStr, porCajaStr, codigo, articulo] = match
+      const cajas = Number(cajasStr)
+      const porCaja = Number(porCajaStr)
+      const totalQty = cajas * porCaja
+      return {
+        id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        code: codigo,
+        name: articulo.trim(),
+        quantity: totalQty,
+        originalQuantity: totalQty,
+        isChecked: false,
+        unitPrice: unitPrice && unitPrice > 0 ? unitPrice : undefined,
+        subtotal: subtotal && subtotal > 0 ? subtotal : undefined,
+      }
+    }
+
+    // 3) Solo unidades simples: "6 859 ABSOLUT APEACH 700CC"
+    const simplePattern = /^(\d+)\s+(\d+)\s+(.+)$/i
+    match = cleanLine.match(simplePattern)
+    if (match) {
+      const [_, qtyStr, codigo, articulo] = match
+      const qty = Number(qtyStr)
+      return {
+        id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        code: codigo,
+        name: articulo.trim(),
+        quantity: qty,
+        originalQuantity: qty,
+        isChecked: false,
+        unitPrice: unitPrice && unitPrice > 0 ? unitPrice : undefined,
+        subtotal: subtotal && subtotal > 0 ? subtotal : undefined,
+      }
+    }
+
+    console.warn("No se pudo parsear línea:", line)
+    return null
   }
 
-  // 4) Patrón para solo unidades
-  const simplePattern = /^(\d+)\s+(\d+)\s+(.+)$/i
-  match = cleanLine.match(simplePattern)
-  if (match) {
-    const [_, qty, codigo, articulo] = match
-    const total = Number(qty)
-    return {
-      // ahora
-id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-
-      code: codigo,
-      name: articulo.trim(),
-      quantity: total,
-      originalQuantity: total,
-      isChecked: false,
-    }
-  }
-
-  // 5) Si nada casó...
-  console.warn("No se pudo parsear:", line)
-  return null
-}
-
-  // Función para procesar el texto pegado
   const processTextContent = (text: string) => {
-    console.log("🔍 Procesando contenido del texto...")
     setIsProcessingText(true)
     setTextError(null)
 
     try {
       const lines = text
         .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .filter((line) => !line.includes("Cajas Unid Codigo Articulo")) // Filtrar encabezado
-
-      console.log(`📄 Procesando ${lines.length} líneas...`)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .filter((l) => !/Cajas\s+Unid\s+Codigo\s+Articulo/i.test(l))
 
       const extractedProducts: Product[] = []
 
@@ -183,23 +215,17 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         const product = parseProductLine(line)
         if (product) {
           extractedProducts.push(product)
-          console.log(`✅ Producto agregado: ${product.name} - Código: ${product.code} - Cantidad: ${product.quantity}`)
         }
       }
-
-      console.log(`🎉 Resumen: ${extractedProducts.length} productos extraídos`)
 
       if (extractedProducts.length > 0) {
         setProducts(extractedProducts)
         setTextError(null)
-        console.log("✅ Productos cargados en el estado")
       } else {
-        setTextError("No se pudieron extraer productos del texto. Verifica que el formato sea correcto.")
-        console.log("❌ No se cargaron productos")
+        setTextError("No se pudieron extraer productos del texto. Verifica el formato."); 
       }
     } catch (error) {
-      console.error("❌ Error procesando texto:", error)
-      setTextError(`Error al procesar el texto: ${error instanceof Error ? error.message : "Error desconocido"}`)
+      setTextError(`Error al procesar el texto: ${error instanceof Error ? error.message : "Desconocido"}`)
     } finally {
       setIsProcessingText(false)
     }
@@ -210,8 +236,6 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       setTextError("Por favor ingresa el texto con los productos")
       return
     }
-
-    // Reset productos antes de procesar
     setProducts([{ id: "1", name: "", quantity: 1, originalQuantity: 1, isChecked: false }])
     processTextContent(textInput)
   }
@@ -219,6 +243,18 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   const clearText = () => {
     setTextInput("")
     setTextError(null)
+  }
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: "ARS",
+      minimumFractionDigits: 2,
+    }).format(price)
+  }
+
+  const calculateTotal = () => {
+    return products.reduce((sum, product) => sum + (product.subtotal || 0), 0)
   }
 
   return (
@@ -229,13 +265,12 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         onOpenChange(newOpen)
       }}
     >
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Crear Nuevo Presupuesto</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Datos del Cliente */}
           <div>
             <h3 className="text-lg font-semibold mb-4">Datos del Cliente</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -261,7 +296,6 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             </div>
           </div>
 
-          {/* Observaciones Iniciales */}
           <div>
             <Label htmlFor="initialNotes">Observaciones Iniciales</Label>
             <Textarea
@@ -273,7 +307,6 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             />
           </div>
 
-          {/* Cargar Productos desde Texto */}
           <div>
             <h3 className="text-lg font-semibold mb-4">Cargar Productos desde Texto</h3>
 
@@ -312,7 +345,6 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
               </div>
             </div>
 
-            {/* Error del texto */}
             {textError && (
               <div className="mt-4 flex items-center gap-2 text-sm text-red-600 bg-red-50 p-3 rounded">
                 <AlertCircle className="w-4 h-4" />
@@ -321,7 +353,6 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             )}
           </div>
 
-          {/* Productos */}
           <div>
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold">Productos ({products.length})</h3>
@@ -337,65 +368,99 @@ id: `parsed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
               </Button>
             </div>
 
-            {/* Encabezados de tabla */}
-            <div className="grid grid-cols-12 gap-2 mb-2 text-sm font-medium text-gray-600 px-2">
-              <div className="col-span-2">Código</div>
-              <div className="col-span-7">Producto</div>
-              <div className="col-span-2">Cantidad Total</div>
-              <div className="col-span-1"></div>
-            </div>
-
-            {/* Lista de productos */}
             <div className="space-y-2">
-              {products.map((product, index) => (
+              <div className="grid grid-cols-12 gap-2 mb-2 text-sm font-medium text-gray-600 px-2 py-2 bg-gray-50 rounded border">
+                <div className="col-span-1">Código</div>
+                <div className="col-span-4">Producto</div>
+                <div className="col-span-1 text-center">Cantidad</div>
+                <div className="col-span-2 text-right">P. Unitario</div>
+                <div className="col-span-3 text-right">Subtotal</div>
+                <div className="col-span-1 text-center">Acción</div>
+              </div>
+
+              {products.map((product) => (
                 <div key={product.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded">
-                  <div className="col-span-2">
+                  <div className="col-span-1">
                     <Input
                       value={product.code || ""}
                       onChange={(e) => updateProduct(product.id, "code", e.target.value)}
                       placeholder="Código"
-                      className="text-sm"
+                      className="text-xs h-8"
                     />
                   </div>
-                  <div className="col-span-7">
+
+                  <div className="col-span-4">
                     <Input
                       value={product.name}
                       onChange={(e) => updateProduct(product.id, "name", e.target.value)}
                       placeholder="Nombre del producto"
-                      className="text-sm"
+                      className="text-sm h-8"
                       required
                     />
                   </div>
-                  <div className="col-span-2">
+
+                  <div className="col-span-1">
                     <Input
                       type="number"
                       value={product.quantity}
                       onChange={(e) => updateProduct(product.id, "quantity", Number.parseFloat(e.target.value) || 1)}
                       min="0.01"
                       step="0.01"
-                      className="text-sm"
+                      className="text-sm h-8 text-center"
                       required
                     />
                   </div>
-                  <div className="col-span-1">
+
+                  <div className="col-span-2">
+                    {product.unitPrice ? (
+                      <div className="text-sm text-green-600 font-medium px-2 py-1 bg-green-50 rounded text-right">
+                        {formatPrice(product.unitPrice)}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-400 px-2 py-1 text-center">-</div>
+                    )}
+                  </div>
+
+                  <div className="col-span-3">
+                    {product.subtotal ? (
+                      <div className="text-sm text-green-700 font-bold px-2 py-1 bg-green-100 rounded text-right">
+                        {formatPrice(product.subtotal)}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-400 px-2 py-1 text-center">-</div>
+                    )}
+                  </div>
+
+                  <div className="col-span-1 text-center">
                     {products.length > 1 && (
                       <Button
                         type="button"
                         onClick={() => removeProduct(product.id)}
                         size="sm"
                         variant="ghost"
-                        className="text-red-600 hover:text-red-700 p-1"
+                        className="text-red-600 hover:text-red-700 p-1 h-6 w-6"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3 h-3" />
                       </Button>
                     )}
                   </div>
                 </div>
               ))}
             </div>
+
+            {calculateTotal() > 0 && (
+              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className="w-5 h-5 text-green-600" />
+                    <span className="text-lg font-semibold text-green-800">Total del Presupuesto:</span>
+                  </div>
+                  <span className="text-2xl font-bold text-green-700">{formatPrice(calculateTotal())}</span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Botones */}
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar

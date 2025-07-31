@@ -163,6 +163,25 @@ export function OrderDetail({
     return `${minutes}m`
   }
 
+  // Formatear precio en pesos argentinos
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: "ARS",
+      minimumFractionDigits: 2,
+    }).format(price)
+  }
+
+  // Calcular total de productos
+  const calculateProductsTotal = (products: Product[]) => {
+    return products.reduce((sum, product) => {
+      if (product.unitPrice && product.quantity) {
+        return sum + product.unitPrice * product.quantity
+      }
+      return sum + (product.subtotal || 0)
+    }, 0)
+  }
+
   const addHistoryEntry = (action: string, notes?: string): HistoryEntry => ({
     id: `hist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     action,
@@ -197,7 +216,17 @@ export function OrderDetail({
     }
 
     // Actualizar solo el estado local, no la orden principal
-    const updatedLocalProducts = localProducts.map((p) => (p.id === productId ? { ...p, quantity: newQuantity } : p))
+    const updatedLocalProducts = localProducts.map((p) => {
+      if (p.id === productId) {
+        const updatedProduct = { ...p, quantity: newQuantity }
+        // Recalcular subtotal si hay precio unitario
+        if (updatedProduct.unitPrice) {
+          updatedProduct.subtotal = updatedProduct.unitPrice * newQuantity
+        }
+        return updatedProduct
+      }
+      return p
+    })
 
     setLocalProducts(updatedLocalProducts)
     setHasUnsavedChanges(true)
@@ -245,6 +274,21 @@ export function OrderDetail({
   // Actualizar código de producto (solo para Vale en estado en_armado)
   const updateProductCode = (productId: string, code: string) => {
     const updatedLocalProducts = localProducts.map((p) => (p.id === productId ? { ...p, code } : p))
+    setLocalProducts(updatedLocalProducts)
+    setHasUnsavedChanges(true)
+  }
+
+  // Actualizar precio unitario (solo para Vale)
+  const updateProductUnitPrice = (productId: string, unitPrice: number) => {
+    const updatedLocalProducts = localProducts.map((p) => {
+      if (p.id === productId) {
+        const updatedProduct = { ...p, unitPrice }
+        // Recalcular subtotal
+        updatedProduct.subtotal = unitPrice * updatedProduct.quantity
+        return updatedProduct
+      }
+      return p
+    })
     setLocalProducts(updatedLocalProducts)
     setHasUnsavedChanges(true)
   }
@@ -321,6 +365,9 @@ export function OrderDetail({
       }
     }
 
+    // Calcular nuevo total
+    const newTotal = calculateProductsTotal(validProducts)
+
     const updatedOrder: Order = {
       ...order,
       products: validProducts.map((p) => ({
@@ -329,6 +376,7 @@ export function OrderDetail({
         isChecked: false,
       })),
       missingProducts: updatedMissingProducts, // Aplicar los faltantes recalculados
+      totalAmount: newTotal > 0 ? newTotal : order.totalAmount,
       history: [
         ...order.history,
         ...historyEntries, // Agregar entradas del historial de cambios en faltantes
@@ -444,10 +492,18 @@ export function OrderDetail({
       `Fecha: ${order.createdAt.toLocaleDateString()}`,
       "",
       "PRODUCTOS:",
-      ...finalProducts.map((p) => `${p.code ? `${p.code} - ` : ""}${p.name}: ${p.quantity}`),
+      ...finalProducts.map((p) => {
+        let line = `${p.code ? `${p.code} - ` : ""}${p.name}: ${p.quantity}`
+        if (currentUser.role === "vale" && p.unitPrice) {
+          line += ` - ${formatPrice(p.unitPrice)} c/u`
+        }
+        return line
+      }),
       "",
       ...(order.missingProducts.length > 0 ? ["FALTANTES:"] : []),
       ...order.missingProducts.map((m) => `${m.code ? `${m.code} - ` : ""}${m.productName}: ${m.quantity}`),
+      "",
+      ...(currentUser.role === "vale" && order.totalAmount ? [`TOTAL: ${formatPrice(order.totalAmount)}`] : []),
     ]
       .filter((line) => line !== "")
       .join("\n")
@@ -1019,6 +1075,13 @@ export function OrderDetail({
                     Esperando verificación de Vale
                   </Badge>
                 )}
+                {/* Mostrar total solo para Vale */}
+                {currentUser.role === "vale" && order.totalAmount && (
+                  <div className="text-right">
+                    <p className="text-sm text-green-600 font-medium">Total:</p>
+                    <p className="text-lg font-bold text-green-700">{formatPrice(order.totalAmount)}</p>
+                  </div>
+                )}
               </div>
             </div>
           </DialogHeader>
@@ -1079,63 +1142,282 @@ export function OrderDetail({
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-3">
-                    {localProducts.map((product, index) => (
-                      <div
-                        key={product.id}
-                        className={`flex flex-col gap-3 p-3 border rounded-lg transition-colors ${
-                          canUserPerformAction("edit_products") &&
-                          !canUserPerformAction("edit_presupuesto") &&
-                          !isBeingWorkedOnByOther
-                            ? product.isChecked
-                              ? "bg-green-50 border-green-200 cursor-pointer"
-                              : "hover:bg-gray-50 cursor-pointer"
-                            : ""
-                        } ${isBeingWorkedOnByOther ? "opacity-60" : ""}`}
-                        onClick={() => {
-                          if (
+                  {/* Vista de tabla para Vale */}
+                  {currentUser.role === "vale" ? (
+                    <div className="space-y-4">
+                      {/* Encabezados de tabla */}
+                      <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-gray-50 rounded-lg text-sm font-medium text-gray-700 border">
+                        <div className="col-span-1">Código</div>
+                        <div className="col-span-4">Artículo</div>
+                        <div className="col-span-1 text-center">Cantidad</div>
+                        <div className="col-span-2 text-right">P. Unitario</div>
+                        <div className="col-span-2 text-right">Subtotal</div>
+                        <div className="col-span-2 text-center">Acciones</div>
+                      </div>
+
+                      {/* Filas de productos */}
+                      <div className="space-y-2">
+                        {localProducts.map((product, index) => (
+                          <div
+                            key={product.id}
+                            className={`grid grid-cols-12 gap-2 items-center p-3 border rounded-lg transition-colors ${
+                              canUserPerformAction("edit_products") &&
+                              !canUserPerformAction("edit_presupuesto") &&
+                              !isBeingWorkedOnByOther
+                                ? product.isChecked
+                                  ? "bg-green-50 border-green-200 cursor-pointer"
+                                  : "hover:bg-gray-50 cursor-pointer"
+                                : ""
+                            } ${isBeingWorkedOnByOther ? "opacity-60" : ""}`}
+                            onClick={() => {
+                              if (
+                                canUserPerformAction("edit_products") &&
+                                !canUserPerformAction("edit_presupuesto") &&
+                                !isBeingWorkedOnByOther
+                              ) {
+                                toggleLocalProductCheck(product.id)
+                              }
+                            }}
+                          >
+                            {/* Checkbox para control */}
+                            {canUserPerformAction("edit_products") &&
+                              !canUserPerformAction("edit_presupuesto") &&
+                              !isBeingWorkedOnByOther && (
+                                <div className="col-span-12 mb-2">
+                                  <Checkbox
+                                    checked={product.isChecked || false}
+                                    onCheckedChange={() => toggleLocalProductCheck(product.id)}
+                                    className="pointer-events-none"
+                                  />
+                                </div>
+                              )}
+
+                            {/* Código */}
+                            <div className="col-span-1">
+                              {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
+                                <Input
+                                  placeholder="Código"
+                                  value={product.code || ""}
+                                  onChange={(e) => updateProductCode(product.id, e.target.value)}
+                                  className="text-xs h-8"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <Badge variant="outline" className="text-xs">
+                                  {product.code || "-"}
+                                </Badge>
+                              )}
+                            </div>
+
+                            {/* Artículo */}
+                            <div className="col-span-4">
+                              {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
+                                <Input
+                                  placeholder="Nombre del producto"
+                                  value={product.name}
+                                  onChange={(e) => updateProductName(product.id, e.target.value)}
+                                  className="text-sm h-8"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <span className="font-medium  text-sm">{product.name}</span>
+                              )}
+                            </div>
+
+                            {/* Cantidad */}
+                            <div className="col-span-1 text-center">
+                              {editingProduct === product.id ? (
+                                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                  <Input
+                                    type="number"
+                                    value={editQuantity}
+                                    onChange={(e) => setEditQuantity(Number.parseFloat(e.target.value) || 0)}
+                                    className="w-16 h-8 text-xs"
+                                    step="0.01"
+                                    min="0"
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        updateLocalProductQuantity(product.id, editQuantity)
+                                      } else if (e.key === "Escape") {
+                                        setEditingProduct(null)
+                                        setEditQuantity(0)
+                                      }
+                                    }}
+                                    autoFocus
+                                  />
+                                  <Button
+                                    size="sm"
+                                    onClick={() => updateLocalProductQuantity(product.id, editQuantity)}
+                                    disabled={editQuantity < 0}
+                                    className="h-6 w-6 p-0"
+                                  >
+                                    <Save className="w-3 h-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setEditingProduct(null)
+                                      setEditQuantity(0)
+                                    }}
+                                    className="h-6 w-6 p-0"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              ) : canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
+                                <Input
+                                  type="number"
+                                  value={product.quantity}
+                                  onChange={(e) =>
+                                    updateLocalProductQuantity(product.id, Number.parseFloat(e.target.value) || 1)
+                                  }
+                                  className="w-20 h-8 text-center text-sm"
+                                  step="0.01"
+                                  min="1"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <div className="flex flex-col items-center">
+                                  <Badge variant="outline" className="text-sm">
+                                    {product.quantity}
+                                  </Badge>
+                                  {product.originalQuantity && product.originalQuantity !== product.quantity && (
+                                    <span className="text-xs text-gray-500">(orig: {product.originalQuantity})</span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Precio Unitario */}
+                            <div className="col-span-2 text-right">
+                              {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
+                                <Input
+                                  type="number"
+                                  placeholder="0.00"
+                                  value={product.unitPrice || ""}
+                                  onChange={(e) =>
+                                    updateProductUnitPrice(product.id, Number.parseFloat(e.target.value) || 0)
+                                  }
+                                  className="text-sm h-8 text-right"
+                                  step="0.01"
+                                  min="0"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : product.unitPrice ? (
+                                <span className="text-sm font-medium text-green-600">
+                                  {formatPrice(product.unitPrice)}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-gray-400">-</span>
+                              )}
+                            </div>
+
+                            {/* Subtotal */}
+                            <div className="col-span-2 text-right">
+                              {product.subtotal ? (
+                                <span className="text-sm font-bold text-green-700">
+                                  {formatPrice(product.subtotal)}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-gray-400">-</span>
+                              )}
+                            </div>
+
+                            {/* Acciones */}
+                            <div className="col-span-2 flex justify-center gap-1">
+                              {canUserPerformAction("edit_products") &&
+                                !canUserPerformAction("edit_presupuesto") &&
+                                !isBeingWorkedOnByOther && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setEditingProduct(product.id)
+                                      setEditQuantity(product.quantity)
+                                    }}
+                                    title="Editar cantidad"
+                                    className="h-6 w-6 p-0"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                  </Button>
+                                )}
+                              {canUserPerformAction("edit_presupuesto") &&
+                                localProducts.length > 1 &&
+                                !isBeingWorkedOnByOther && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      removeProduct(product.id)
+                                    }}
+                                    className="text-red-600 hover:text-red-700 h-6 w-6 p-0"
+                                    title="Eliminar producto"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </Button>
+                                )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Total de productos para Vale */}
+                      {calculateProductsTotal(localProducts) > 0 && (
+                        <div className="mt-4 p-4 bg-green-50  rounded-lg">
+                          <div className="grid grid-cols-12 gap-2 items-center">
+                            <div className="col-span-7"></div>
+                            <div className="col-span-3 text-right">
+                              <span className="text-lg font-bold text-green-800">TOTAL:</span>
+                            </div>
+                            <div className="col-span-2 text-right">
+                              <span className="text-xl font-bold text-green-700">
+                                {formatPrice(calculateProductsTotal(localProducts))}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Vista original para armadores */
+                    <div className="space-y-3">
+                      {localProducts.map((product, index) => (
+                        <div
+                          key={product.id}
+                          className={`flex flex-col gap-3 p-3 border rounded-lg transition-colors ${
                             canUserPerformAction("edit_products") &&
                             !canUserPerformAction("edit_presupuesto") &&
                             !isBeingWorkedOnByOther
-                          ) {
-                            toggleLocalProductCheck(product.id)
-                          }
-                        }}
-                      >
-                        <div className="flex items-center gap-3">
-                          {canUserPerformAction("edit_products") &&
-                            !canUserPerformAction("edit_presupuesto") &&
-                            !isBeingWorkedOnByOther && (
-                              <Checkbox
-                                checked={product.isChecked || false}
-                                onCheckedChange={() => toggleLocalProductCheck(product.id)}
-                                className="pointer-events-none"
-                              />
-                            )}
+                              ? product.isChecked
+                                ? "bg-green-50 border-green-200 cursor-pointer"
+                                : "hover:bg-gray-50 cursor-pointer"
+                              : ""
+                          } ${isBeingWorkedOnByOther ? "opacity-60" : ""}`}
+                          onClick={() => {
+                            if (
+                              canUserPerformAction("edit_products") &&
+                              !canUserPerformAction("edit_presupuesto") &&
+                              !isBeingWorkedOnByOther
+                            ) {
+                              toggleLocalProductCheck(product.id)
+                            }
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            {canUserPerformAction("edit_products") &&
+                              !canUserPerformAction("edit_presupuesto") &&
+                              !isBeingWorkedOnByOther && (
+                                <Checkbox
+                                  checked={product.isChecked || false}
+                                  onCheckedChange={() => toggleLocalProductCheck(product.id)}
+                                  className="pointer-events-none"
+                                />
+                              )}
 
-                          <div className="flex-1">
-                            {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
-                              <div className="space-y-2">
-                                <div className="flex gap-2">
-                                  {product.code !== undefined && (
-                                    <Input
-                                      placeholder="Código"
-                                      value={product.code || ""}
-                                      onChange={(e) => updateProductCode(product.id, e.target.value)}
-                                      className="w-24"
-                                      onClick={(e) => e.stopPropagation()}
-                                    />
-                                  )}
-                                  <Input
-                                    placeholder="Nombre del producto"
-                                    value={product.name}
-                                    onChange={(e) => updateProductName(product.id, e.target.value)}
-                                    className="flex-1"
-                                    onClick={(e) => e.stopPropagation()}
-                                  />
-                                </div>
-                              </div>
-                            ) : (
+                            <div className="flex-1">
                               <div className="flex items-center gap-2">
                                 {product.code && (
                                   <Badge variant="outline" className="text-xs">
@@ -1144,106 +1426,76 @@ export function OrderDetail({
                                 )}
                                 <span className="font-medium font-medium-responsive">{product.name}</span>
                               </div>
-                            )}
-                          </div>
+                            </div>
 
-                          <div className="flex items-center gap-2">
-                            {editingProduct === product.id ? (
-                              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                                <Input
-                                  type="number"
-                                  value={editQuantity}
-                                  onChange={(e) => setEditQuantity(Number.parseFloat(e.target.value) || 0)}
-                                  className="w-24"
-                                  step="0.01"
-                                  min="0"
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      updateLocalProductQuantity(product.id, editQuantity)
-                                    } else if (e.key === "Escape") {
-                                      setEditingProduct(null)
-                                      setEditQuantity(0)
-                                    }
-                                  }}
-                                  autoFocus
-                                />
-                                <Button
-                                  size="sm"
-                                  onClick={() => updateLocalProductQuantity(product.id, editQuantity)}
-                                  disabled={editQuantity < 0}
-                                >
-                                  <Save className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setEditingProduct(null)
-                                    setEditQuantity(0)
-                                  }}
-                                >
-                                  <X className="w-3 h-3" />
-                                </Button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2">
-                                {canUserPerformAction("edit_presupuesto") && !isBeingWorkedOnByOther ? (
+                            <div className="flex items-center gap-2">
+                              {editingProduct === product.id ? (
+                                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                   <Input
                                     type="number"
-                                    value={product.quantity}
-                                    onChange={(e) =>
-                                      updateLocalProductQuantity(product.id, Number.parseFloat(e.target.value) || 1)
-                                    }
+                                    value={editQuantity}
+                                    onChange={(e) => setEditQuantity(Number.parseFloat(e.target.value) || 0)}
                                     className="w-24"
                                     step="0.01"
-                                    min="1"
-                                    onClick={(e) => e.stopPropagation()}
+                                    min="0"
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        updateLocalProductQuantity(product.id, editQuantity)
+                                      } else if (e.key === "Escape") {
+                                        setEditingProduct(null)
+                                        setEditQuantity(0)
+                                      }
+                                    }}
+                                    autoFocus
                                   />
-                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => updateLocalProductQuantity(product.id, editQuantity)}
+                                    disabled={editQuantity < 0}
+                                  >
+                                    <Save className="w-3 h-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setEditingProduct(null)
+                                      setEditQuantity(0)
+                                    }}
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
                                   <Badge variant="outline">{product.quantity}</Badge>
-                                )}
-                                {product.originalQuantity && product.originalQuantity !== product.quantity && (
-                                  <span className="text-xs text-gray-500">(orig: {product.originalQuantity})</span>
-                                )}
-                                {canUserPerformAction("edit_products") &&
-                                  !canUserPerformAction("edit_presupuesto") &&
-                                  !isBeingWorkedOnByOther && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        setEditingProduct(product.id)
-                                        setEditQuantity(product.quantity)
-                                      }}
-                                      title="Editar cantidad"
-                                    >
-                                      <Edit3 className="w-3 h-3" />
-                                    </Button>
+                                  {product.originalQuantity && product.originalQuantity !== product.quantity && (
+                                    <span className="text-xs text-gray-500">(orig: {product.originalQuantity})</span>
                                   )}
-                                {canUserPerformAction("edit_presupuesto") &&
-                                  localProducts.length > 1 &&
-                                  !isBeingWorkedOnByOther && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        removeProduct(product.id)
-                                      }}
-                                      className="text-red-600 hover:text-red-700"
-                                      title="Eliminar producto"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </Button>
-                                  )}
-                              </div>
-                            )}
+                                  {canUserPerformAction("edit_products") &&
+                                    !canUserPerformAction("edit_presupuesto") &&
+                                    !isBeingWorkedOnByOther && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setEditingProduct(product.id)
+                                          setEditQuantity(product.quantity)
+                                        }}
+                                        title="Editar cantidad"
+                                      >
+                                        <Edit3 className="w-3 h-3" />
+                                      </Button>
+                                    )}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

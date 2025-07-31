@@ -1,12 +1,12 @@
 "use client"
 
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Package, AlertTriangle, RotateCcw, DollarSign, User, FileText, Copy, CheckCircle, Clock } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Package, CheckCircle, AlertTriangle, FileText } from "lucide-react"
 import type { Order } from "../page"
+import { useState } from "react"
 
 interface CompletedOrderSummaryProps {
   order: Order
@@ -14,285 +14,276 @@ interface CompletedOrderSummaryProps {
 }
 
 export function CompletedOrderSummary({ order, onClose }: CompletedOrderSummaryProps) {
-  const copyToClipboard = () => {
-    const summary = `
-RESUMEN COMPLETO DEL PEDIDO
-===========================
+  const [copyMessage, setCopyMessage] = useState("")
 
-Cliente: ${order.clientName}
-ID Pedido: ${order.id}
-Dirección: ${order.clientAddress || "No especificada"}
-Fecha de Creación: ${order.createdAt.toLocaleDateString()}
-Estado Final: Pagado
-Método de Pago: ${order.paymentMethod === "efectivo" ? "Efectivo" : "Transferencia"}
+  // Formatear precio en pesos argentinos
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: "ARS",
+      minimumFractionDigits: 2,
+    }).format(price)
+  }
 
-PRODUCTOS ENTREGADOS (${order.products.length}):
-${order.products
-  .map(
-    (p, i) =>
-      `${i + 1}. ${p.name}${p.code ? ` (${p.code})` : ""} - Cantidad: ${p.quantity}${
-        p.originalQuantity && p.originalQuantity !== p.quantity ? ` (Original: ${p.originalQuantity})` : ""
-      }`,
-  )
-  .join("\n")}
+  // Calcular total de productos
+  const calculateProductsTotal = (products: any[]) => {
+    return products.reduce((sum, product) => {
+      if (product.unitPrice && product.quantity) {
+        return sum + product.unitPrice * product.quantity
+      }
+      return sum + (product.subtotal || 0)
+    }, 0)
+  }
 
-${
-  order.missingProducts.length > 0
-    ? `PRODUCTOS FALTANTES (${order.missingProducts.length}):
-${order.missingProducts
-  .map((m, i) => `${i + 1}. ${m.productName}${m.code ? ` (${m.code})` : ""} - Cantidad faltante: ${m.quantity}`)
-  .join("\n")}`
-    : "✅ No hubo productos faltantes"
-}
+  const copyCompleteSummary = () => {
+    const finalProducts = order.products.filter((p) => p.quantity > 0)
+    const summaryText = [
+      `PEDIDO COMPLETADO - ${order.clientName}`,
+      `ID: ${order.id}`,
+      `Fecha: ${order.createdAt.toLocaleDateString()}`,
+      `Estado: Pagado con ${order.paymentMethod}`,
+      "",
+      "PRODUCTOS ENTREGADOS:",
+      ...finalProducts.map((p) => {
+        let line = `${p.code ? `${p.code} - ` : ""}${p.name}: ${p.quantity}`
+        if (p.unitPrice) {
+          line += ` - ${formatPrice(p.unitPrice)} c/u = ${formatPrice(p.unitPrice * p.quantity)}`
+        }
+        return line
+      }),
+      "",
+      ...(order.missingProducts.length > 0 ? ["FALTANTES:"] : []),
+      ...order.missingProducts.map((m) => `${m.code ? `${m.code} - ` : ""}${m.productName}: ${m.quantity}`),
+      "",
+      ...(order.returnedProducts.length > 0 ? ["PRODUCTOS DEVUELTOS:"] : []),
+      ...order.returnedProducts.map(
+        (r) =>
+          `${r.code ? `${r.code} - ` : ""}${r.productName}: ${r.quantity} - ${r.reason || "Sin razón especificada"}`,
+      ),
+      "",
+      ...(order.totalAmount ? [`TOTAL FACTURADO: ${formatPrice(order.totalAmount)}`] : []),
+    ]
+      .filter((line) => line !== "")
+      .join("\n")
 
-${
-  order.returnedProducts.length > 0
-    ? `PRODUCTOS DEVUELTOS (${order.returnedProducts.length}):
-${order.returnedProducts
-  .map(
-    (r, i) =>
-      `${i + 1}. ${r.productName}${r.code ? ` (${r.code})` : ""} - Cantidad: ${r.quantity}${
-        r.reason ? ` - Motivo: ${r.reason}` : ""
-      }`,
-  )
-  .join("\n")}`
-    : "✅ No hubo productos devueltos"
-}
-
-HISTORIAL COMPLETO:
-${order.history
-  .map((h) => `• ${h.timestamp.toLocaleString()} - ${h.user}: ${h.action}${h.notes ? ` (${h.notes})` : ""}`)
-  .join("\n")}
-
-PERSONAL INVOLUCRADO:
-${order.armedBy ? `• Armado por: ${order.armedBy}` : ""}
-${order.controlledBy ? `• Controlado por: ${order.controlledBy}` : ""}
-
-${order.initialNotes ? `OBSERVACIONES INICIALES:\n${order.initialNotes}` : ""}
-    `.trim()
-
-    navigator.clipboard.writeText(summary)
+    navigator.clipboard.writeText(summaryText).then(() => {
+      setCopyMessage("Resumen completo copiado")
+      setTimeout(() => setCopyMessage(""), 2000)
+    })
   }
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh]">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CheckCircle className="w-5 h-5 text-green-600" />
-            Resumen Completo - {order.clientName}
-          </DialogTitle>
-          <DialogDescription>
-            Pedido completado el {order.createdAt.toLocaleDateString()} • ID: {order.id}
-          </DialogDescription>
+          <div className="flex justify-between items-start">
+            <div>
+              <DialogTitle className="text-xl">{order.clientName}</DialogTitle>
+              <p className="text-sm text-gray-600 mt-1">ID: {order.id}</p>
+              {copyMessage && <p className="text-sm text-green-600 mt-1">✓ {copyMessage}</p>}
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <Badge className="bg-emerald-500 text-white flex items-center gap-1">
+                <CheckCircle className="w-4 h-4" />
+                Pagado
+              </Badge>
+              <Badge variant="outline" className="text-xs">
+                {order.paymentMethod === "efectivo" ? "Efectivo" : "Transferencia"}
+              </Badge>
+              {/* Mostrar total */}
+              {order.totalAmount && (
+                <div className="text-right">
+                  <p className="text-sm text-green-600 font-medium">Total:</p>
+                  <p className="text-lg font-bold text-green-700">{formatPrice(order.totalAmount)}</p>
+                </div>
+              )}
+            </div>
+          </div>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[70vh]">
-          <div className="space-y-6">
-            {/* Información General */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <FileText className="w-5 h-5" />
-                  Información General
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Cliente:</span>
-                    <span className="font-medium">{order.clientName}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">ID Pedido:</span>
-                    <span className="font-mono text-sm">{order.id}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Dirección:</span>
-                    <span className="font-medium">{order.clientAddress || "No especificada"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Fecha:</span>
-                    <span className="font-medium">{order.createdAt.toLocaleDateString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Método de Pago:</span>
-                    <Badge variant="outline">
-                      <DollarSign className="w-3 h-3 mr-1" />
-                      {order.paymentMethod === "efectivo" ? "Efectivo" : "Transferencia"}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Estado Final:</span>
-                    <Badge className="bg-green-700 text-white">
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Pagado
-                    </Badge>
-                  </div>
+        <div className="space-y-6">
+          {/* Información del cliente */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Información del Cliente</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div>
+                <span className="font-medium">Nombre:</span> {order.clientName}
+              </div>
+              {order.clientAddress && (
+                <div>
+                  <span className="font-medium">Dirección:</span> {order.clientAddress}
                 </div>
-              </CardContent>
-            </Card>
+              )}
+              <div>
+                <span className="font-medium">Creado:</span> {order.createdAt.toLocaleString()}
+              </div>
+              <div>
+                <span className="font-medium">Completado:</span>{" "}
+                {order.history[order.history.length - 1]?.timestamp.toLocaleString()}
+              </div>
+              {order.armedBy && (
+                <div>
+                  <span className="font-medium">Armado por:</span> {order.armedBy}
+                </div>
+              )}
+              {order.controlledBy && (
+                <div>
+                  <span className="font-medium">Controlado por:</span> {order.controlledBy}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-            {/* Productos Entregados */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Package className="w-5 h-5 text-green-600" />
-                  Productos Entregados ({order.products.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {order.products.map((product, index) => (
-                    <div key={product.id} className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                      <div className="flex-1">
-                        <div className="font-medium">{product.name}</div>
-                        {product.code && <div className="text-sm text-gray-600">Código: {product.code}</div>}
+          {/* Productos entregados */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Productos Entregados</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {order.products
+                  .filter((p) => p.quantity > 0)
+                  .map((product) => (
+                    <div key={product.id} className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        {product.code && (
+                          <Badge variant="outline" className="text-xs">
+                            {product.code}
+                          </Badge>
+                        )}
+                        <span className="font-medium">{product.name}</span>
+                        {product.unitPrice && (
+                          <span className="text-sm text-green-600">- {formatPrice(product.unitPrice)} c/u</span>
+                        )}
                       </div>
-                      <div className="text-right">
-                        <Badge variant="secondary">{product.quantity} unidades</Badge>
-                        {product.originalQuantity && product.originalQuantity !== product.quantity && (
-                          <div className="text-xs text-gray-500 mt-1">Original: {product.originalQuantity}</div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{product.quantity}</Badge>
+                        {product.unitPrice && (
+                          <span className="text-sm font-medium text-green-700">
+                            = {formatPrice(product.unitPrice * product.quantity)}
+                          </span>
                         )}
                       </div>
                     </div>
                   ))}
+              </div>
+
+              {/* Total de productos */}
+              {calculateProductsTotal(order.products) > 0 && (
+                <div className="mt-4 p-3 bg-green-100 border border-green-200 rounded-lg">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium text-green-800">Total de Productos:</span>
+                    <span className="text-lg font-bold text-green-700">
+                      {formatPrice(calculateProductsTotal(order.products))}
+                    </span>
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
+              )}
+            </CardContent>
+          </Card>
 
-            {/* Productos Faltantes */}
-            {order.missingProducts.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <AlertTriangle className="w-5 h-5 text-orange-600" />
-                    Productos Faltantes ({order.missingProducts.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    {order.missingProducts.map((missing, index) => (
-                      <div key={index} className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
-                        <div className="flex-1">
-                          <div className="font-medium">{missing.productName}</div>
-                          {missing.code && <div className="text-sm text-gray-600">Código: {missing.code}</div>}
-                        </div>
-                        <Badge variant="destructive">{missing.quantity} faltantes</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Productos Devueltos */}
-            {order.returnedProducts.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <RotateCcw className="w-5 h-5 text-blue-600" />
-                    Productos Devueltos ({order.returnedProducts.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    {order.returnedProducts.map((returned, index) => (
-                      <div key={index} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-                        <div className="flex-1">
-                          <div className="font-medium">{returned.productName}</div>
-                          {returned.code && <div className="text-sm text-gray-600">Código: {returned.code}</div>}
-                          {returned.reason && (
-                            <div className="text-sm text-blue-700 mt-1">Motivo: {returned.reason}</div>
-                          )}
-                        </div>
-                        <Badge variant="outline" className="text-blue-600">
-                          {returned.quantity} devueltos
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Personal Involucrado */}
+          {/* Faltantes */}
+          {order.missingProducts.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
-                  <User className="w-5 h-5" />
-                  Personal Involucrado
+                  <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  Faltantes ({order.missingProducts.length})
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {order.armedBy && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Armado por:</span>
-                      <Badge variant="outline">{order.armedBy}</Badge>
-                    </div>
-                  )}
-                  {order.controlledBy && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Controlado por:</span>
-                      <Badge variant="outline">{order.controlledBy}</Badge>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Historial Completo */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Clock className="w-5 h-5" />
-                  Historial Completo
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {order.history.map((entry, index) => (
-                    <div key={entry.id} className="flex gap-3">
-                      <div className="flex-shrink-0 w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 text-sm">
-                          <span className="font-medium">{entry.user}</span>
-                          <span className="text-gray-500">•</span>
-                          <span className="text-gray-600">{entry.timestamp.toLocaleString()}</span>
-                        </div>
-                        <div className="text-sm mt-1">{entry.action}</div>
-                        {entry.notes && <div className="text-xs text-gray-600 mt-1 italic">{entry.notes}</div>}
+                <div className="space-y-2">
+                  {order.missingProducts.map((missing) => (
+                    <div
+                      key={missing.productId}
+                      className="flex justify-between items-center py-2 px-3 bg-red-50 rounded-lg"
+                    >
+                      <div>
+                        {missing.code && (
+                          <Badge variant="outline" className="text-xs mr-2">
+                            {missing.code}
+                          </Badge>
+                        )}
+                        <span className="text-red-700">{missing.productName}</span>
                       </div>
+                      <Badge variant="destructive">{missing.quantity}</Badge>
                     </div>
                   ))}
                 </div>
               </CardContent>
             </Card>
+          )}
 
-            {/* Observaciones Iniciales */}
-            {order.initialNotes && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Observaciones Iniciales</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="text-sm">{order.initialNotes}</p>
+          {/* Productos devueltos */}
+          {order.returnedProducts.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Package className="w-5 h-5 text-blue-500" />
+                  Productos Devueltos ({order.returnedProducts.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {order.returnedProducts.map((returned, index) => (
+                    <div
+                      key={`${returned.productId}-${index}`}
+                      className="flex justify-between items-center py-2 px-3 bg-blue-50 rounded-lg"
+                    >
+                      <div>
+                        {returned.code && (
+                          <Badge variant="outline" className="text-xs mr-2">
+                            {returned.code}
+                          </Badge>
+                        )}
+                        <span className="text-blue-700">{returned.productName}</span>
+                        {returned.reason && <p className="text-xs text-blue-600 mt-1">{returned.reason}</p>}
+                      </div>
+                      <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                        {returned.quantity}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Historial resumido */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Historial del Pedido</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3 max-h-48 overflow-y-auto">
+                {order.history.map((entry) => (
+                  <div key={entry.id} className="border-l-2 border-green-200 pl-4 pb-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-medium text-sm">{entry.action}</p>
+                        <p className="text-xs text-gray-600">por {entry.user}</p>
+                        {entry.notes && <p className="text-xs text-gray-700 mt-1 italic">{entry.notes}</p>}
+                      </div>
+                      <span className="text-xs text-gray-500">{entry.timestamp.toLocaleString()}</span>
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </ScrollArea>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
-        {/* Botones */}
-        <div className="flex justify-between pt-4 border-t">
-          <Button variant="outline" onClick={copyToClipboard} className="flex items-center gap-2 bg-transparent">
-            <Copy className="w-4 h-4" />
-            Copiar Resumen
+        {/* Botones de acción */}
+        <div className="flex justify-between pt-4">
+          <Button onClick={copyCompleteSummary} variant="outline" className="flex items-center gap-2 bg-transparent">
+            <FileText className="w-4 h-4" />
+            Copiar Resumen Completo
           </Button>
-          <Button onClick={onClose}>Cerrar</Button>
+          <Button variant="outline" onClick={onClose}>
+            Cerrar
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
