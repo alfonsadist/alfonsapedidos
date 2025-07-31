@@ -155,6 +155,7 @@ export function useSupabase() {
           createdAt: new Date(orderData.created_at),
           currentlyWorkingBy: orderData.currently_working_by,
           workingStartTime: orderData.working_start_time ? new Date(orderData.working_start_time) : undefined,
+          totalAmount: orderData.total_amount ? Number.parseFloat(orderData.total_amount) : undefined,
           products: productsData.map((p) => ({
             id: p.id,
             code: p.code,
@@ -162,6 +163,8 @@ export function useSupabase() {
             quantity: Number.parseFloat(p.quantity),
             originalQuantity: p.original_quantity ? Number.parseFloat(p.original_quantity) : undefined,
             isChecked: p.is_checked,
+            unitPrice: p.unit_price ? Number.parseFloat(p.unit_price) : undefined,
+            subtotal: p.subtotal ? Number.parseFloat(p.subtotal) : undefined,
           })),
           missingProducts: missingData.map((m) => ({
             productId: m.product_id,
@@ -276,6 +279,7 @@ export function useSupabase() {
         status: "en_armado",
         is_paid: false,
         initial_notes: orderData.initialNotes,
+        total_amount: orderData.totalAmount,
       })
 
       if (orderError) {
@@ -294,6 +298,8 @@ export function useSupabase() {
         quantity: product.quantity,
         original_quantity: product.quantity,
         is_checked: false,
+        unit_price: product.unitPrice,
+        subtotal: product.subtotal,
       }))
 
       console.log("📦 Productos a insertar:", productsToInsert.length)
@@ -468,6 +474,7 @@ export function useSupabase() {
           initial_notes: order.initialNotes,
           currently_working_by: order.currentlyWorkingBy,
           working_start_time: order.workingStartTime?.toISOString(),
+          total_amount: order.totalAmount,
         })
         .eq("id", order.id)
 
@@ -485,6 +492,8 @@ export function useSupabase() {
           quantity: p.quantity,
           original_quantity: p.originalQuantity,
           is_checked: p.isChecked,
+          unit_price: p.unitPrice,
+          subtotal: p.subtotal,
         }))
 
         const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
