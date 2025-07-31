@@ -1036,9 +1036,12 @@ export function OrderDetail({
   return (
     <>
       <Dialog
-        open={true}
+       open={true}
         onOpenChange={() => {
-          stopWorking()
+          // Limpiar el estado de trabajo solo si el usuario actual era quien estaba trabajando
+          if (order.currentlyWorkingBy === currentUser.name) {
+            stopWorking()
+          }
           onClose()
         }}
       >

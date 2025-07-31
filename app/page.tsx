@@ -333,8 +333,19 @@ const handleRefresh = async () => {
 
   // Manejar cuando alguien abre un pedido para trabajar
   const handleOrderSelect = async (order: Order) => {
-    // No marcar automáticamente como trabajando al abrir
-    setSelectedOrder(order)
+    // Si el usuario es un armador, el pedido está para armar y nadie más está trabajando,
+    // marcar que este usuario ha comenzado a trabajar.
+    if (currentUser?.role === "armador" && order.status === "en_armado" && !order.currentlyWorkingBy) {
+      await setWorkingOnOrder(order.id, currentUser.name, currentUser.role)
+      // Refrescar los datos para que el estado se actualice inmediatamente en la UI local
+      const ordersData = await fetchOrders()
+      setOrders(ordersData)
+      // Buscar la orden actualizada para pasarla al detalle
+      const updatedOrder = ordersData.find((o) => o.id === order.id)
+      setSelectedOrder(updatedOrder || order)
+    } else {
+      setSelectedOrder(order)
+    }
   }
 
   // Manejar cuando se hace clic en un pedido completado
