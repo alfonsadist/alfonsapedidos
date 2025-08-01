@@ -6,9 +6,15 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Gestión de Pedidos",
+  title: "Llerena - Gestión de Pedidos",
   description: "Sistema completo de gestión de pedidos con trazabilidad",
-    generator: 'v0.dev'
+  icons: {
+    icon: [
+      { url: "/alfonsa32x32.png", sizes: "32x32", type: "image/png" },
+      "/alfonsa32x32.png", // fallback
+    ],
+    apple: "/alfonsa32x32.png",
+  },
 }
 
 export default function RootLayout({
