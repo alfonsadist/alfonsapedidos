@@ -20,7 +20,7 @@ const DEFAULT_USERS: User[] = [
   { id: "4", name: "Negro", role: "armador" },
 ]
 
-// Funciones para manejar la persistencia del usuario por dispositivo
+// Persistencia de usuario
 export const saveCurrentUser = (user: User) => {
   if (typeof window !== "undefined") {
     localStorage.setItem("currentUser", JSON.stringify(user))
@@ -48,7 +48,7 @@ export const clearCurrentUser = () => {
   }
 }
 
-// Función para generar IDs únicos
+// IDs únicos
 const generateUniqueId = (prefix = "") => {
   const timestamp = Date.now()
   const random = Math.random().toString(36).substr(2, 9)
@@ -59,11 +59,9 @@ export function useSupabase() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Priorizar Supabase sobre localStorage
   const useSupabaseDB = !!supabase
   const useLocalStorage = !supabase
 
-  // Log del estado de conexión
   useEffect(() => {
     if (useSupabaseDB) {
       console.log("✅ Conectado a Supabase - Datos en tiempo real activados")
@@ -72,17 +70,18 @@ export function useSupabase() {
     }
   }, [useSupabaseDB])
 
-  // Obtener todos los pedidos
-  const fetchOrders = async (): Promise<Order[]> => {
+  // ===== Obtener pedidos (ahora con filtro rápido de activos) =====
+  const fetchOrders = async (opts?: { onlyActive?: boolean }): Promise<Order[]> => {
+    const onlyActive = !!opts?.onlyActive
     setLoading(true)
     setError(null)
 
     try {
       if (useLocalStorage) {
-        // Usar localStorage como fallback
         const savedOrders = localStorage.getItem("orders")
+        let parsed: Order[] = []
         if (savedOrders) {
-          const parsedOrders = JSON.parse(savedOrders).map((order: any) => ({
+          parsed = JSON.parse(savedOrders).map((order: any) => ({
             ...order,
             createdAt: new Date(order.createdAt),
             workingStartTime: order.workingStartTime ? new Date(order.workingStartTime) : undefined,
@@ -91,54 +90,42 @@ export function useSupabase() {
               timestamp: new Date(h.timestamp),
             })),
           }))
-          return parsedOrders
         }
-        return []
+        if (onlyActive) {
+          parsed = parsed.filter((o) => o.status !== "pagado" && o.status !== "entregado")
+        }
+        // ordenar por fecha desc (como en supabase)
+        parsed.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+        return parsed
       }
 
-      // Código de Supabase
-      console.log("🔄 Obteniendo pedidos desde Supabase...")
-      const { data: ordersData, error: ordersError } = await supabase!
-        .from("orders")
-        .select("*")
-        .order("created_at", { ascending: false })
+      // 1) Traer SOLO las órdenes (más rápido y baratas)
+      let baseQuery = supabase!.from("orders").select("*").order("created_at", { ascending: false })
+      if (onlyActive) {
+        // activos = todo excepto entregado/pagado
+        baseQuery = baseQuery.neq("status", "pagado").neq("status", "entregado")
+      }
 
+      console.log("🔄 Obteniendo pedidos desde Supabase...", onlyActive ? "(solo activos)" : "(todos)")
+      const { data: ordersRows, error: ordersError } = await baseQuery
       if (ordersError) throw ordersError
+      if (!ordersRows || ordersRows.length === 0) return []
 
       const orders: Order[] = []
 
-      for (const orderData of ordersData) {
-        // Obtener productos
-        const { data: productsData, error: productsError } = await supabase!
-          .from("products")
-          .select("*")
-          .eq("order_id", orderData.id)
+      // 2) Para cada orden, traer sus tablas asociadas (sigue igual, pero con menos órdenes cuando onlyActive=true)
+      for (const orderData of ordersRows) {
+        const [{ data: productsData, error: productsError }, { data: missingData, error: missingError }, { data: returnedData, error: returnedError }, { data: historyData, error: historyError }] =
+          await Promise.all([
+            supabase!.from("products").select("*").eq("order_id", orderData.id),
+            supabase!.from("missing_products").select("*").eq("order_id", orderData.id),
+            supabase!.from("returned_products").select("*").eq("order_id", orderData.id),
+            supabase!.from("order_history").select("*").eq("order_id", orderData.id).order("created_at", { ascending: true }),
+          ])
 
         if (productsError) throw productsError
-
-        // Obtener productos faltantes
-        const { data: missingData, error: missingError } = await supabase!
-          .from("missing_products")
-          .select("*")
-          .eq("order_id", orderData.id)
-
         if (missingError) throw missingError
-
-        // Obtener productos devueltos
-        const { data: returnedData, error: returnedError } = await supabase!
-          .from("returned_products")
-          .select("*")
-          .eq("order_id", orderData.id)
-
         if (returnedError) throw returnedError
-
-        // Obtener historial
-        const { data: historyData, error: historyError } = await supabase!
-          .from("order_history")
-          .select("*")
-          .eq("order_id", orderData.id)
-          .order("created_at", { ascending: true })
-
         if (historyError) throw historyError
 
         const order: Order = {
@@ -156,7 +143,7 @@ export function useSupabase() {
           currentlyWorkingBy: orderData.currently_working_by,
           workingStartTime: orderData.working_start_time ? new Date(orderData.working_start_time) : undefined,
           totalAmount: orderData.total_amount ? Number.parseFloat(orderData.total_amount) : undefined,
-          products: productsData.map((p) => ({
+          products: (productsData ?? []).map((p) => ({
             id: p.id,
             code: p.code,
             name: p.name,
@@ -166,20 +153,20 @@ export function useSupabase() {
             unitPrice: p.unit_price ? Number.parseFloat(p.unit_price) : undefined,
             subtotal: p.subtotal ? Number.parseFloat(p.subtotal) : undefined,
           })),
-          missingProducts: missingData.map((m) => ({
+          missingProducts: (missingData ?? []).map((m) => ({
             productId: m.product_id,
             productName: m.product_name,
             code: m.code,
             quantity: Number.parseFloat(m.quantity),
           })),
-          returnedProducts: returnedData.map((r) => ({
+          returnedProducts: (returnedData ?? []).map((r) => ({
             productId: r.product_id,
             productName: r.product_name,
             code: r.code,
             quantity: Number.parseFloat(r.quantity),
             reason: r.reason,
           })),
-          history: historyData.map((h) => ({
+          history: (historyData ?? []).map((h) => ({
             id: h.id,
             action: h.action,
             user: h.user_name,
@@ -202,7 +189,7 @@ export function useSupabase() {
     }
   }
 
-  // Crear nuevo pedido
+  // ===== Crear pedido =====
   const createOrder = async (
     orderData: Omit<
       Order,
@@ -226,7 +213,6 @@ export function useSupabase() {
       console.log("🚀 Creando pedido con ID:", orderId)
 
       if (useLocalStorage) {
-        // Usar localStorage como fallback
         const newOrder: Order = {
           ...orderData,
           id: orderId,
@@ -257,7 +243,6 @@ export function useSupabase() {
         orders.push(newOrder)
         localStorage.setItem("orders", JSON.stringify(orders))
 
-        // Broadcast notification
         broadcastNotification({
           type: "info",
           title: "Nuevo Presupuesto",
@@ -268,10 +253,7 @@ export function useSupabase() {
         return true
       }
 
-      // Código de Supabase
-      console.log("📝 Insertando orden en Supabase...")
-
-      // Insertar orden
+      // Supabase
       const { error: orderError } = await supabase!.from("orders").insert({
         id: orderId,
         client_name: orderData.clientName,
@@ -281,15 +263,8 @@ export function useSupabase() {
         initial_notes: orderData.initialNotes,
         total_amount: orderData.totalAmount,
       })
+      if (orderError) throw orderError
 
-      if (orderError) {
-        console.error("❌ Error al insertar orden:", orderError)
-        throw orderError
-      }
-
-      console.log("✅ Orden creada, insertando productos...")
-
-      // Insertar productos con IDs únicos
       const productsToInsert = orderData.products.map((product) => ({
         id: product.id || generateUniqueId("PROD-"),
         order_id: orderId,
@@ -302,18 +277,9 @@ export function useSupabase() {
         subtotal: product.subtotal,
       }))
 
-      console.log("📦 Productos a insertar:", productsToInsert.length)
-
       const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
+      if (productsError) throw productsError
 
-      if (productsError) {
-        console.error("❌ Error al insertar productos:", productsError)
-        throw productsError
-      }
-
-      console.log("✅ Productos insertados, creando historial...")
-
-      // Insertar historial
       const historyId = generateUniqueId("HIST-")
       const { error: historyError } = await supabase!.from("order_history").insert({
         id: historyId,
@@ -322,13 +288,8 @@ export function useSupabase() {
         user_name: currentUser.name,
         notes: orderData.initialNotes,
       })
+      if (historyError) throw historyError
 
-      if (historyError) {
-        console.error("❌ Error al insertar historial:", historyError)
-        throw historyError
-      }
-
-      // Broadcast notification
       broadcastNotification({
         type: "info",
         title: "Nuevo Presupuesto",
@@ -347,36 +308,27 @@ export function useSupabase() {
     }
   }
 
-  // Marcar que un usuario está trabajando en un pedido
+  // ===== Working flags =====
   const setWorkingOnOrder = async (orderId: string, userName: string, userRole: string): Promise<boolean> => {
-    // Solo los armadores pueden marcar que están trabajando
     if (userRole !== "armador") return true
-
     try {
       if (useLocalStorage) {
         const savedOrders = localStorage.getItem("orders")
         const orders = savedOrders ? JSON.parse(savedOrders) : []
-        const orderIndex = orders.findIndex((o: Order) => o.id === orderId)
-
-        if (orderIndex >= 0) {
-          orders[orderIndex].currentlyWorkingBy = userName
-          orders[orderIndex].workingStartTime = new Date()
+        const idx = orders.findIndex((o: Order) => o.id === orderId)
+        if (idx >= 0) {
+          orders[idx].currentlyWorkingBy = userName
+          orders[idx].workingStartTime = new Date()
           localStorage.setItem("orders", JSON.stringify(orders))
         }
         return true
       }
 
-      console.log(`👷 ${userName} empezó a trabajar en pedido ${orderId}`)
       const { error } = await supabase!
         .from("orders")
-        .update({
-          currently_working_by: userName,
-          working_start_time: new Date().toISOString(),
-        })
+        .update({ currently_working_by: userName, working_start_time: new Date().toISOString() })
         .eq("id", orderId)
-
       if (error) throw error
-      console.log("✅ Estado de trabajo actualizado en Supabase")
       return true
     } catch (err) {
       console.error("❌ Error setting working status:", err)
@@ -384,39 +336,28 @@ export function useSupabase() {
     }
   }
 
-  // Limpiar que un usuario está trabajando en un pedido
   const clearWorkingOnOrder = async (orderId: string, userName?: string, userRole?: string): Promise<boolean> => {
-    // Solo los armadores pueden limpiar el estado de trabajo
     if (userRole && userRole !== "armador") return true
-
     try {
       if (useLocalStorage) {
         const savedOrders = localStorage.getItem("orders")
         const orders = savedOrders ? JSON.parse(savedOrders) : []
-        const orderIndex = orders.findIndex((o: Order) => o.id === orderId)
-
-        if (orderIndex >= 0) {
-          // Solo limpiar si el usuario actual es quien está trabajando o no se especifica usuario
-          if (!userName || orders[orderIndex].currentlyWorkingBy === userName) {
-            orders[orderIndex].currentlyWorkingBy = undefined
-            orders[orderIndex].workingStartTime = undefined
+        const idx = orders.findIndex((o: Order) => o.id === orderId)
+        if (idx >= 0) {
+          if (!userName || orders[idx].currentlyWorkingBy === userName) {
+            orders[idx].currentlyWorkingBy = undefined
+            orders[idx].workingStartTime = undefined
             localStorage.setItem("orders", JSON.stringify(orders))
           }
         }
         return true
       }
 
-      console.log(`🏁 ${userName || "Usuario"} terminó de trabajar en pedido ${orderId}`)
       const { error } = await supabase!
         .from("orders")
-        .update({
-          currently_working_by: null,
-          working_start_time: null,
-        })
+        .update({ currently_working_by: null, working_start_time: null })
         .eq("id", orderId)
-
       if (error) throw error
-      console.log("✅ Estado de trabajo limpiado en Supabase")
       return true
     } catch (err) {
       console.error("❌ Error clearing working status:", err)
@@ -424,27 +365,22 @@ export function useSupabase() {
     }
   }
 
-  // Actualizar pedido
+  // ===== Update / Delete / Users (sin cambios de lógica) =====
   const updateOrder = async (order: Order, currentUser?: User): Promise<boolean> => {
     setLoading(true)
     setError(null)
-
     try {
       if (useLocalStorage) {
-        // Usar localStorage como fallback
         const savedOrders = localStorage.getItem("orders")
         const orders = savedOrders ? JSON.parse(savedOrders) : []
-        const orderIndex = orders.findIndex((o: Order) => o.id === order.id)
-
-        if (orderIndex >= 0) {
-          orders[orderIndex] = order
+        const idx = orders.findIndex((o: Order) => o.id === order.id)
+        if (idx >= 0) {
+          orders[idx] = order
           localStorage.setItem("orders", JSON.stringify(orders))
         }
-
-        // Broadcast notification si hay cambio de estado
         if (currentUser) {
-          const lastHistoryEntry = order.history[order.history.length - 1]
-          if (lastHistoryEntry && lastHistoryEntry.user === currentUser.name) {
+          const last = order.history[order.history.length - 1]
+          if (last && last.user === currentUser.name) {
             broadcastNotification({
               type: "success",
               title: "Estado Actualizado",
@@ -453,12 +389,8 @@ export function useSupabase() {
             })
           }
         }
-
         return true
       }
-
-      // Código de Supabase
-      console.log(`🔄 Actualizando pedido ${order.id} en Supabase...`)
 
       const { error: orderError } = await supabase!
         .from("orders")
@@ -477,12 +409,9 @@ export function useSupabase() {
           total_amount: order.totalAmount,
         })
         .eq("id", order.id)
-
       if (orderError) throw orderError
 
-      // Eliminar productos existentes y reinsertar
       await supabase!.from("products").delete().eq("order_id", order.id)
-
       if (order.products.length > 0) {
         const productsToInsert = order.products.map((p) => ({
           id: p.id || generateUniqueId("PROD-"),
@@ -495,15 +424,11 @@ export function useSupabase() {
           unit_price: p.unitPrice,
           subtotal: p.subtotal,
         }))
-
         const { error: productsError } = await supabase!.from("products").insert(productsToInsert)
-
         if (productsError) throw productsError
       }
 
-      // Eliminar y reinsertar productos faltantes
       await supabase!.from("missing_products").delete().eq("order_id", order.id)
-
       if (order.missingProducts.length > 0) {
         const missingToInsert = order.missingProducts.map((m) => ({
           order_id: order.id,
@@ -512,15 +437,11 @@ export function useSupabase() {
           code: m.code,
           quantity: m.quantity,
         }))
-
         const { error: missingError } = await supabase!.from("missing_products").insert(missingToInsert)
-
         if (missingError) throw missingError
       }
 
-      // Eliminar y reinsertar productos devueltos
       await supabase!.from("returned_products").delete().eq("order_id", order.id)
-
       if (order.returnedProducts.length > 0) {
         const returnedToInsert = order.returnedProducts.map((r) => ({
           order_id: order.id,
@@ -530,18 +451,13 @@ export function useSupabase() {
           quantity: r.quantity,
           reason: r.reason,
         }))
-
         const { error: returnedError } = await supabase!.from("returned_products").insert(returnedToInsert)
-
         if (returnedError) throw returnedError
       }
 
-      // Insertar nuevas entradas de historial (solo las que no existen)
       const { data: existingHistory } = await supabase!.from("order_history").select("id").eq("order_id", order.id)
-
       const existingIds = new Set(existingHistory?.map((h) => h.id) || [])
       const newHistoryEntries = order.history.filter((h) => !existingIds.has(h.id))
-
       if (newHistoryEntries.length > 0) {
         const historyToInsert = newHistoryEntries.map((h) => ({
           id: h.id || generateUniqueId("HIST-"),
@@ -551,16 +467,13 @@ export function useSupabase() {
           notes: h.notes,
           created_at: h.timestamp.toISOString(),
         }))
-
         const { error: historyError } = await supabase!.from("order_history").insert(historyToInsert)
-
         if (historyError) throw historyError
       }
 
-      // Broadcast notification si hay cambio de estado
       if (currentUser) {
-        const lastHistoryEntry = order.history[order.history.length - 1]
-        if (lastHistoryEntry && lastHistoryEntry.user === currentUser.name) {
+        const last = order.history[order.history.length - 1]
+        if (last && last.user === currentUser.name) {
           broadcastNotification({
             type: "success",
             title: "Estado Actualizado",
@@ -581,26 +494,19 @@ export function useSupabase() {
     }
   }
 
-  // Eliminar pedido
   const deleteOrder = async (orderId: string): Promise<boolean> => {
     setLoading(true)
     setError(null)
-
     try {
       if (useLocalStorage) {
-        // Usar localStorage como fallback
         const savedOrders = localStorage.getItem("orders")
         const orders = savedOrders ? JSON.parse(savedOrders) : []
-        const filteredOrders = orders.filter((o: Order) => o.id !== orderId)
-        localStorage.setItem("orders", JSON.stringify(filteredOrders))
+        const filtered = orders.filter((o: Order) => o.id !== orderId)
+        localStorage.setItem("orders", JSON.stringify(filtered))
         return true
       }
-
-      // Código de Supabase
-      console.log(`🗑️ Eliminando pedido ${orderId} de Supabase...`)
       const { error } = await supabase!.from("orders").delete().eq("id", orderId)
       if (error) throw error
-      console.log("✅ Pedido eliminado exitosamente de Supabase")
       return true
     } catch (err) {
       console.error("❌ Error al eliminar pedido:", err)
@@ -611,31 +517,16 @@ export function useSupabase() {
     }
   }
 
-  // Obtener usuarios
   const fetchUsers = async (): Promise<User[]> => {
-    if (useLocalStorage) {
-      // Usar usuarios por defecto
-      return DEFAULT_USERS
-    }
-
+    if (useLocalStorage) return DEFAULT_USERS
     try {
-      console.log("👥 Obteniendo usuarios desde Supabase...")
       const { data, error } = await supabase!.from("users").select("*").order("name")
-
       if (error) {
         console.error("❌ Error al obtener usuarios:", error)
         setError(error.message)
         return DEFAULT_USERS
       }
-
-      const users = data.map((u) => ({
-        id: u.id,
-        name: u.name,
-        role: u.role,
-      }))
-
-      console.log(`✅ ${users.length} usuarios obtenidos desde Supabase`)
-      return users
+      return (data || []).map((u) => ({ id: u.id, name: u.name, role: u.role }))
     } catch (err) {
       console.error("❌ Error fetching users:", err)
       return DEFAULT_USERS
@@ -645,7 +536,7 @@ export function useSupabase() {
   return {
     loading,
     error,
-    fetchOrders,
+    fetchOrders, // <- ahora con opción onlyActive
     createOrder,
     updateOrder,
     deleteOrder,
@@ -656,7 +547,7 @@ export function useSupabase() {
   }
 }
 
-// Sistema de broadcasting de notificaciones
+// ===== Broadcasting entre pestañas =====
 interface BroadcastNotification {
   type: "success" | "error" | "info" | "warning"
   title: string
@@ -665,22 +556,14 @@ interface BroadcastNotification {
 }
 
 const broadcastNotification = (notification: BroadcastNotification) => {
-  // Usar localStorage para simular broadcasting entre pestañas
-  const broadcastData = {
-    ...notification,
-    timestamp: Date.now(),
-    id: generateUniqueId("NOTIF-"),
-  }
-
+  const broadcastData = { ...notification, timestamp: Date.now(), id: generateUniqueId("NOTIF-") }
   localStorage.setItem("broadcast_notification", JSON.stringify(broadcastData))
-
-  // Limpiar después de un momento para evitar acumulación
   setTimeout(() => {
     localStorage.removeItem("broadcast_notification")
   }, 1000)
 }
 
-// Hook para escuchar notificaciones broadcast
+// ===== Hooks auxiliares =====
 export const useBroadcastNotifications = (currentUserName: string, onNotification: (notification: any) => void) => {
   if (typeof window !== "undefined") {
     window.addEventListener("storage", (e) => {
@@ -698,33 +581,19 @@ export const useBroadcastNotifications = (currentUserName: string, onNotificatio
   }
 }
 
-// Hook para suscripciones en tiempo real de Supabase
 export const useRealtimeOrders = (onOrderChange: (payload: any) => void) => {
   useEffect(() => {
     if (!supabase) return
-
     console.log("🔴 Configurando suscripciones en tiempo real...")
-
-    // Suscribirse a cambios en la tabla orders
-    const ordersSubscription = supabase
+    const ch = supabase
       .channel("orders-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, (payload) => {
-        console.log("📡 Cambio en orders:", payload)
-        onOrderChange(payload)
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, (payload) => {
-        console.log("📡 Cambio en products:", payload)
-        onOrderChange(payload)
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "order_history" }, (payload) => {
-        console.log("📡 Cambio en order_history:", payload)
-        onOrderChange(payload)
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, onOrderChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, onOrderChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "order_history" }, onOrderChange)
       .subscribe()
-
     return () => {
       console.log("🔴 Desconectando suscripciones en tiempo real...")
-      supabase.removeChannel(ordersSubscription)
+      supabase.removeChannel(ch)
     }
   }, [onOrderChange])
 }
