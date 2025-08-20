@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -54,6 +54,9 @@ export type UserRole = {
   name: string
   role: "vale" | "armador"
 }
+
+// 👇 para que el hook pueda importar `User`
+export type User = UserRole
 
 export type Product = {
   id: string
@@ -134,10 +137,12 @@ export default function OrderManagement() {
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all")
   const [previousOrders, setPreviousOrders] = useState<Order[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [backgroundLoading, setBackgroundLoading] = useState(false)
+
   const {
     loading,
     error,
-    fetchOrders,
+    fetchOrders, // ahora acepta { onlyActive?: boolean }
     createOrder,
     updateOrder,
     deleteOrder,
@@ -149,135 +154,135 @@ export default function OrderManagement() {
 
   const { notifications, addNotification, removeNotification } = useNotifications()
 
+  // ====== Refresh manual priorizando activos ======
   const handleRefresh = async () => {
     setIsRefreshing(true)
     try {
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
-      addNotification("success", "Actualizado", "Datos actualizados correctamente")
-    } catch (error) {
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
+      addNotification("success", "Actualizado", "Cargados pedidos activos")
+
+      setBackgroundLoading(true)
+      const all = await fetchOrders({ onlyActive: false })
+      setOrders(all)
+    } catch {
       addNotification("error", "Error", "No se pudieron actualizar los datos")
     } finally {
       setIsRefreshing(false)
+      setBackgroundLoading(false)
     }
   }
-  // Escuchar notificaciones broadcast
+
+  // ====== Broadcast UI ======
   useBroadcastNotifications(currentUser?.name || "", (notification) => {
     addNotification(notification.type, notification.title, notification.message)
   })
 
-  // Configurar suscripciones en tiempo real de Supabase
-  useRealtimeOrders((payload) => {
-    console.log("🔄 Cambio detectado en tiempo real, refrescando datos...")
-    // Refrescar datos cuando hay cambios
-    fetchOrders().then(setOrders)
+  // ====== Realtime: refresca rápido los activos ======
+  useRealtimeOrders(async () => {
+    const fast = await fetchOrders({ onlyActive: true })
+    setOrders(fast)
   })
 
-  // Cargar datos iniciales
+  // ====== Carga inicial: activos primero, resto después ======
   useEffect(() => {
-    const loadData = async () => {
-      const [ordersData, usersData] = await Promise.all([fetchOrders(), fetchUsers()])
-
-      setOrders(ordersData)
+    const load = async () => {
+      const usersData = await fetchUsers()
       setUsers(usersData)
 
-      // Intentar cargar el usuario guardado en este dispositivo
-      const savedUser = getCurrentUser()
-      if (savedUser && usersData.some((u) => u.id === savedUser.id)) {
-        // Si el usuario guardado existe en la lista de usuarios, usarlo
-        setCurrentUser(savedUser)
+      const saved = getCurrentUser()
+      if (saved && usersData.some((u) => u.id === saved.id)) {
+        setCurrentUser(saved)
       } else {
-        // Si no hay usuario guardado o no existe, usar Vale por defecto
-        const defaultUser = usersData.find((u) => u.name === "Vale") || usersData[0]
-        if (defaultUser) {
-          setCurrentUser(defaultUser)
-          saveCurrentUser(defaultUser)
+        const def = usersData.find((u) => u.name === "Vale") || usersData[0]
+        if (def) {
+          setCurrentUser(def)
+          saveCurrentUser(def)
         }
       }
-    }
 
-    loadData()
+      // primero activos
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
+
+      // luego el resto en background
+      setBackgroundLoading(true)
+      const all = await fetchOrders({ onlyActive: false })
+      setOrders(all)
+      setBackgroundLoading(false)
+    }
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Detectar cambios en pedidos para notificaciones
+  // ====== Notificaciones por cambios ======
   useEffect(() => {
     if (previousOrders.length > 0 && orders.length > 0) {
-      // Detectar nuevos pedidos
-      const newOrders = orders.filter((order) => !previousOrders.some((prev) => prev.id === order.id))
-      newOrders.forEach((order) => {
+      const newOrders = orders.filter((o) => !previousOrders.some((p) => p.id === o.id))
+      newOrders.forEach((o) => {
         if (currentUser?.name !== "Vale") {
-          addNotification("info", "Nuevo Pedido", `Se creó el pedido para ${order.clientName}`)
+          addNotification("info", "Nuevo Pedido", `Se creó el pedido para ${o.clientName}`)
         }
       })
 
-      // Detectar cambios de estado
-      orders.forEach((order) => {
-        const previousOrder = previousOrders.find((prev) => prev.id === order.id)
-        if (previousOrder && previousOrder.status !== order.status) {
-          const statusLabel = STATUS_CONFIG[order.status].label
-          const lastHistoryEntry = order.history[order.history.length - 1]
-          if (lastHistoryEntry && lastHistoryEntry.user !== currentUser?.name) {
-            addNotification(
-              "success",
-              "Estado Actualizado",
-              `${order.clientName} - ${statusLabel} por ${lastHistoryEntry.user}`,
-            )
+      orders.forEach((o) => {
+        const prev = previousOrders.find((p) => p.id === o.id)
+        if (!prev) return
+        if (prev.status !== o.status) {
+          const statusLabel = STATUS_CONFIG[o.status].label
+          const last = o.history[o.history.length - 1]
+          if (last && last.user !== currentUser?.name) {
+            addNotification("success", "Estado Actualizado", `${o.clientName} - ${statusLabel} por ${last.user}`)
           }
         }
-
-        // Detectar cuando alguien empieza a trabajar en un pedido
-        if (previousOrder && !previousOrder.currentlyWorkingBy && order.currentlyWorkingBy) {
-          if (order.currentlyWorkingBy !== currentUser?.name) {
-            addNotification(
-              "info",
-              "Trabajando en Pedido",
-              `${order.currentlyWorkingBy} está trabajando en el pedido de ${order.clientName}`,
-            )
-          }
+        if (!prev.currentlyWorkingBy && o.currentlyWorkingBy && o.currentlyWorkingBy !== currentUser?.name) {
+          addNotification("info", "Trabajando en Pedido", `${o.currentlyWorkingBy} está trabajando en ${o.clientName}`)
         }
       })
     }
     setPreviousOrders(orders)
-  }, [orders, currentUser])
+  }, [orders, currentUser]) // eslint-disable-line
 
-  // Refrescar datos automáticamente solo si no está conectado a Supabase (para localStorage)
+  // ====== Auto-poll SOLO en modo local ======
   useEffect(() => {
     if (!isConnectedToSupabase) {
-      const interval = setInterval(async () => {
-        const ordersData = await fetchOrders()
-        setOrders(ordersData)
-      }, 15000)
-
-      return () => clearInterval(interval)
+      const it = setInterval(async () => {
+        const data = await fetchOrders({ onlyActive: true })
+        setOrders(data)
+      }, 15_000)
+      return () => clearInterval(it)
     }
-  }, [isConnectedToSupabase])
+  }, [isConnectedToSupabase, fetchOrders])
 
-  // Filtrar pedidos activos y completados
-  // Filtrar pedidos por categorías
-  const activeOrders = orders.filter((order) => order.status !== "pagado" && order.status !== "entregado")
-  const pendingPaymentOrders = orders.filter((order) => order.status === "entregado" && !order.isPaid)
-  const completedOrders = orders.filter((order) => order.status === "pagado")
+  // ====== Derivados (useMemo para no recalcular en cada render) ======
+  const activeOrders = useMemo(
+    () => orders.filter((o) => o.status !== "pagado" && o.status !== "entregado"),
+    [orders],
+  )
+  const pendingPaymentOrders = useMemo(
+    () => orders.filter((o) => o.status === "entregado" && !o.isPaid),
+    [orders],
+  )
+  const completedOrders = useMemo(() => orders.filter((o) => o.status === "pagado"), [orders])
 
-  // Aplicar filtro de búsqueda
-  const getFilteredOrders = (ordersList: Order[]) => {
-    let filtered = ordersList.filter(
-      (order) =>
-        order.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.id.toLowerCase().includes(searchTerm.toLowerCase()),
-    )
-    // Aplicar filtro por estado si no es "all"
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((order) => order.status === statusFilter)
-    }
-
+  const getFilteredOrders = (list: Order[]) => {
+    const term = searchTerm.toLowerCase()
+    let filtered = list.filter((o) => o.clientName.toLowerCase().includes(term) || o.id.toLowerCase().includes(term))
+    if (statusFilter !== "all") filtered = filtered.filter((o) => o.status === statusFilter)
     return filtered
   }
 
-  const filteredActiveOrders = getFilteredOrders(activeOrders)
-  const filteredPendingPaymentOrders = getFilteredOrders(pendingPaymentOrders)
-  const filteredCompletedOrders = getFilteredOrders(completedOrders)
+  const filteredActiveOrders = useMemo(() => getFilteredOrders(activeOrders), [activeOrders, searchTerm, statusFilter])
+  const filteredPendingPaymentOrders = useMemo(
+    () => getFilteredOrders(pendingPaymentOrders),
+    [pendingPaymentOrders, searchTerm, statusFilter],
+  )
+  const filteredCompletedOrders = useMemo(
+    () => getFilteredOrders(completedOrders),
+    [completedOrders, searchTerm, statusFilter],
+  )
 
-  // Crear nuevo pedido
+  // ====== Actions ======
   const handleCreateOrder = async (
     orderData: Omit<
       Order,
@@ -293,95 +298,72 @@ export default function OrderManagement() {
     >,
   ) => {
     if (!currentUser) return
-
-    const success = await createOrder(orderData, currentUser)
-    if (success) {
+    const ok = await createOrder(orderData, currentUser)
+    if (ok) {
       setShowOrderDialog(false)
-      addNotification("success", "Pedido Creado", `Presupuesto para ${orderData.clientName} creado exitosamente`)
-      // Refrescar datos
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
+      addNotification("success", "Pedido Creado", `Presupuesto para ${orderData.clientName} creado`)
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
     } else {
       addNotification("error", "Error", "No se pudo crear el pedido. Intenta nuevamente.")
     }
   }
 
-  // Actualizar pedido
-  const handleUpdateOrder = async (updatedOrder: Order) => {
-    const success = await updateOrder(updatedOrder, currentUser)
-    if (success) {
-      // Refrescar datos
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
+  const handleUpdateOrder = async (updated: Order) => {
+    const ok = await updateOrder(updated, currentUser!)
+    if (ok) {
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
     } else {
       addNotification("error", "Error", "No se pudo actualizar el pedido")
     }
   }
 
-  // Eliminar pedido
   const handleDeleteOrder = async (orderId: string) => {
-    const success = await deleteOrder(orderId)
-    if (success) {
+    const ok = await deleteOrder(orderId)
+    if (ok) {
       addNotification("info", "Pedido Eliminado", "El pedido fue eliminado correctamente")
-      // Refrescar datos
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
     } else {
       addNotification("error", "Error", "No se pudo eliminar el pedido")
     }
   }
 
-  // Manejar cambio de usuario y guardarlo en el dispositivo
   const handleUserChange = (userId: string) => {
-    const selectedUser = users.find((u) => u.id === userId)
-    if (selectedUser) {
-      setCurrentUser(selectedUser)
-      saveCurrentUser(selectedUser) // Guardar en localStorage para este dispositivo
-      addNotification("info", "Usuario Cambiado", `Sesión cambiada a ${selectedUser.name}`)
+    const selected = users.find((u) => u.id === userId)
+    if (selected) {
+      setCurrentUser(selected)
+      saveCurrentUser(selected)
+      addNotification("info", "Usuario Cambiado", `Sesión cambiada a ${selected.name}`)
     }
   }
 
-  // Manejar cuando alguien abre un pedido para trabajar
   const handleOrderSelect = async (order: Order) => {
-    // Si el usuario es un armador, el pedido está para armar y nadie más está trabajando,
-    // marcar que este usuario ha comenzado a trabajar.
     if (currentUser?.role === "armador" && order.status === "en_armado" && !order.currentlyWorkingBy) {
       await setWorkingOnOrder(order.id, currentUser.name, currentUser.role)
-      // Refrescar los datos para que el estado se actualice inmediatamente en la UI local
-      const ordersData = await fetchOrders()
-      setOrders(ordersData)
-      // Buscar la orden actualizada para pasarla al detalle
-      const updatedOrder = ordersData.find((o) => o.id === order.id)
-      setSelectedOrder(updatedOrder || order)
+      const fast = await fetchOrders({ onlyActive: true })
+      setOrders(fast)
+      const updated = fast.find((o) => o.id === order.id)
+      setSelectedOrder(updated || order)
     } else {
       setSelectedOrder(order)
     }
   }
 
-  // Manejar cuando se hace clic en un pedido completado
-  const handleCompletedOrderSelect = (order: Order) => {
-    setSelectedCompletedOrder(order)
-  }
+  const handleCompletedOrderSelect = (order: Order) => setSelectedCompletedOrder(order)
 
-  // Verificar si un usuario puede trabajar en un pedido
   const canUserWorkOnOrder = (order: Order, user: UserRole) => {
-    // Vale siempre puede trabajar en sus pedidos
     if (user.role === "vale") return true
-
-    // Si alguien ya está trabajando en el pedido y no es el usuario actual
-    if (order.currentlyWorkingBy && order.currentlyWorkingBy !== user.name) {
-      return false
-    }
+    if (order.currentlyWorkingBy && order.currentlyWorkingBy !== user.name) return false
     return true
   }
 
-  // Obtener el tiempo que alguien lleva trabajando en un pedido
   const getWorkingTime = (order: Order) => {
     if (!order.workingStartTime) return ""
     const start = order.workingStartTime instanceof Date ? order.workingStartTime : new Date(order.workingStartTime)
     if (Number.isNaN(start.getTime())) return ""
-    const diffMs = Date.now() - start.getTime()
-    const minutes = Math.floor(diffMs / 60000)
+    const minutes = Math.floor((Date.now() - start.getTime()) / 60000)
     return `${minutes} min`
   }
 
@@ -399,49 +381,23 @@ export default function OrderManagement() {
 
   const getNextActionForUser = (order: Order, user: UserRole) => {
     if (user.role === "armador") {
-      if (order.status === "en_armado") {
-        return { label: "Armar Pedido", icon: Package }
-      }
-      if (order.status === "armado" && order.armedBy !== user.name) {
-        return { label: "Controlar Armado", icon: CheckCircle }
-      }
-      if (order.status === "facturado") {
-        return { label: "Controlar Factura", icon: CheckCircle }
-      }
-      if (order.status === "factura_controlada") {
-        return { label: "Marcar En Tránsito", icon: Truck }
-      }
-      if (order.status === "en_transito") {
-        return { label: "Marcar Entregado", icon: CheckCircle }
-      }
-      if (order.status === "entregado" && !order.isPaid) {
-        return { label: "Procesar Pago", icon: DollarSign }
-      }
+      if (order.status === "en_armado") return { label: "Armar Pedido", icon: Package }
+      if (order.status === "armado" && order.armedBy !== user.name) return { label: "Controlar Armado", icon: CheckCircle }
+      if (order.status === "facturado") return { label: "Controlar Factura", icon: CheckCircle }
+      if (order.status === "factura_controlada") return { label: "Marcar En Tránsito", icon: Truck }
+      if (order.status === "en_transito") return { label: "Marcar Entregado", icon: CheckCircle }
+      if (order.status === "entregado" && !order.isPaid) return { label: "Procesar Pago", icon: DollarSign }
     }
-
     if (user.role === "vale") {
-      if (order.status === "en_armado") {
-        return { label: "Editar Presupuesto", icon: Edit3 }
-      }
-      if (order.status === "armado_controlado") {
-        return { label: "Facturar", icon: DollarSign }
-      }
-      if (order.awaitingPaymentVerification) {
-        return { label: "Verificar Transferencia", icon: CheckCircle }
-      }
+      if (order.status === "en_armado") return { label: "Editar Presupuesto", icon: Edit3 }
+      if (order.status === "armado_controlado") return { label: "Facturar", icon: DollarSign }
+      if (order.awaitingPaymentVerification) return { label: "Verificar Transferencia", icon: CheckCircle }
     }
-
     return null
   }
 
-  // Formatear precio en pesos argentinos
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat("es-AR", {
-      style: "currency",
-      currency: "ARS",
-      minimumFractionDigits: 2,
-    }).format(price)
-  }
+  const formatPrice = (price: number) =>
+    new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 }).format(price)
 
   const renderOrderCard = (order: Order, showDeleteButton = true, isCompleted = false) => {
     if (!currentUser) return null
@@ -452,8 +408,9 @@ export default function OrderManagement() {
     return (
       <Card
         key={order.id}
-        className={`cursor-pointer hover:shadow-lg transition-shadow ${getOrderPriorityColor(order)} ${!canWork ? "opacity-75" : ""
-          }`}
+        className={`cursor-pointer hover:shadow-lg transition-shadow ${getOrderPriorityColor(order)} ${
+          !canWork ? "opacity-75" : ""
+        }`}
         onClick={() => (isCompleted ? handleCompletedOrderSelect(order) : handleOrderSelect(order))}
       >
         <CardHeader className="pb-3">
@@ -495,8 +452,7 @@ export default function OrderManagement() {
               <span className="font-medium">{order.products.length}</span>
             </div>
 
-            {/* Mostrar total solo para Vale */}
-            {currentUser.role === "vale" && order.totalAmount && (
+            {currentUser.role === "vale" && typeof order.totalAmount === "number" && (
               <div className="flex justify-between text-sm">
                 <span className="text-green-600 font-medium">Total:</span>
                 <span className="font-bold text-green-600">{formatPrice(order.totalAmount)}</span>
@@ -551,7 +507,6 @@ export default function OrderManagement() {
               </div>
             )}
 
-            {/* Advertencia si alguien más está trabajando */}
             {!canWork && order.currentlyWorkingBy && (
               <div className="pt-2 border-t">
                 <div className="text-xs text-orange-600 bg-orange-50 p-2 rounded flex items-center gap-1">
@@ -561,7 +516,6 @@ export default function OrderManagement() {
               </div>
             )}
 
-            {/* Botón de acción siguiente para pedidos activos */}
             {!isCompleted && nextAction && canWork && (
               <div className="pt-2 border-t">
                 <Button
@@ -580,7 +534,6 @@ export default function OrderManagement() {
               </div>
             )}
 
-            {/* Mensaje para pedidos completados */}
             {isCompleted && (
               <div className="pt-2 border-t">
                 <div className="text-xs text-green-600 bg-green-50 p-2 rounded text-center">
@@ -591,7 +544,6 @@ export default function OrderManagement() {
           </div>
         </CardContent>
 
-        {/* Botón de eliminar */}
         {currentUser.role === "vale" && showDeleteButton && (
           <div className="px-6 pb-4">
             <Button
@@ -600,11 +552,7 @@ export default function OrderManagement() {
               className="w-full flex items-center gap-2"
               onClick={(e) => {
                 e.stopPropagation()
-                if (
-                  confirm(
-                    `¿Estás seguro de que quieres eliminar el pedido de ${order.clientName}? Esta acción no se puede deshacer.`,
-                  )
-                ) {
+                if (confirm(`¿Eliminar el pedido de ${order.clientName}? Esta acción no se puede deshacer.`)) {
                   handleDeleteOrder(order.id)
                 }
               }}
@@ -637,13 +585,7 @@ export default function OrderManagement() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-4">
-                <Image
-                  src="/alfonsa-logo.png"
-                  alt="Alfonsa Distribuidora"
-                  width={80}
-                  height={80}
-                  className="object-contain"
-                />
+                <Image src="/alfonsa-logo.png" alt="Alfonsa Distribuidora" width={80} height={80} className="object-contain" />
                 <div>
                   <h1 className="text-3xl font-bold text-gray-900">Gestión de Pedidos</h1>
                   <p className="text-gray-600 mt-1">Control completo del proceso de pedidos</p>
@@ -665,6 +607,12 @@ export default function OrderManagement() {
                         </>
                       )}
                     </div>
+                    {backgroundLoading && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
+                        <span className="text-xs text-blue-600">Cargando más pedidos...</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -673,7 +621,6 @@ export default function OrderManagement() {
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
               <a
                 href="https://v0-stock-control-system-three.vercel.app/"
-                //target="_blank"
                 rel="noopener noreferrer"
                 className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center gap-2 bg-white"
               >
@@ -710,7 +657,7 @@ export default function OrderManagement() {
           </div>
         </div>
 
-        {/* Tabs para Pedidos Activos y Completados */}
+        {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
           <TabsList className="grid w-full grid-cols-3 max-w-2xl">
             <TabsTrigger value="active" className="flex items-center gap-2">
@@ -757,15 +704,15 @@ export default function OrderManagement() {
             )}
           </div>
 
+          {/* Activos */}
           <TabsContent value="active">
-            {loading ? (
+            {loading && orders.length === 0 ? (
               <div className="text-center py-12">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
                 <p>Cargando pedidos activos...</p>
               </div>
             ) : (
               <>
-                {/* Lista de pedidos activos */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {filteredActiveOrders.map((order) => renderOrderCard(order, true, false))}
                 </div>
@@ -775,9 +722,7 @@ export default function OrderManagement() {
                     <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No hay pedidos activos</h3>
                     <p className="text-gray-600 mb-4">
-                      {searchTerm
-                        ? "No se encontraron pedidos con ese criterio"
-                        : "Comienza creando tu primer presupuesto"}
+                      {searchTerm ? "No se encontraron pedidos con ese criterio" : "Comienza creando tu primer presupuesto"}
                     </p>
                     {!searchTerm && currentUser.role === "vale" && (
                       <Button onClick={() => setShowOrderDialog(true)}>Crear Primer Presupuesto</Button>
@@ -787,15 +732,16 @@ export default function OrderManagement() {
               </>
             )}
           </TabsContent>
+
+          {/* Pagos pendientes */}
           <TabsContent value="pending-payment">
-            {loading ? (
+            {loading && orders.length === 0 ? (
               <div className="text-center py-12">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
                 <p>Cargando pagos pendientes...</p>
               </div>
             ) : (
               <>
-                {/* Lista de pedidos con pagos pendientes */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {filteredPendingPaymentOrders.map((order) => renderOrderCard(order, true, false))}
                 </div>
@@ -814,15 +760,16 @@ export default function OrderManagement() {
               </>
             )}
           </TabsContent>
+
+          {/* Completados */}
           <TabsContent value="completed">
-            {loading ? (
+            {loading && orders.length === 0 ? (
               <div className="text-center py-12">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
                 <p>Cargando historial...</p>
               </div>
             ) : (
               <>
-                {/* Lista de pedidos completados */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {filteredCompletedOrders.map((order) => renderOrderCard(order, true, true))}
                 </div>
@@ -832,9 +779,7 @@ export default function OrderManagement() {
                     <History className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No hay pedidos completados</h3>
                     <p className="text-gray-600">
-                      {searchTerm
-                        ? "No se encontraron pedidos completados con ese criterio"
-                        : "Los pedidos completados aparecerán aquí"}
+                      {searchTerm ? "No se encontraron pedidos completados con ese criterio" : "Los pedidos completados aparecerán aquí"}
                     </p>
                   </div>
                 )}
@@ -854,11 +799,10 @@ export default function OrderManagement() {
           order={selectedOrder}
           currentUser={currentUser}
           onClose={async () => {
-            // Limpiar el estado de trabajo cuando se cierra el diálogo
             if (selectedOrder.currentlyWorkingBy === currentUser.name) {
               await clearWorkingOnOrder(selectedOrder.id, currentUser.name, currentUser.role)
-              const ordersData = await fetchOrders()
-              setOrders(ordersData)
+              const fast = await fetchOrders({ onlyActive: true })
+              setOrders(fast)
             }
             setSelectedOrder(null)
           }}
